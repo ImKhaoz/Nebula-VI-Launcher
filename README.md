@@ -74,7 +74,7 @@ dotnet run --project .\Nebula-GTAVI.csproj
 To produce a self-contained Windows x64 ZIP and SHA-256 checksum, run the release script from the repository root. Its output goes to `release/`. If the GitHub repository is not yet created, omit `-Repository`; the package still runs self-contained, and update checking stays disabled until a repository is set.
 
 ```powershell
-.\tools\Publish-NebulaRelease.ps1 -Version 0.1.0-preview.17 -Repository OWNER/REPOSITORY
+.\tools\Publish-NebulaRelease.ps1 -Version 0.1.0-preview.19 -Repository OWNER/REPOSITORY
 ```
 
 After creating the GitHub repository, set it on the release build with `-Repository OWNER/REPOSITORY`. Increment the semantic version for every release and publish the generated ZIP as an asset. Nebula checks the GitHub latest-release endpoint at startup when a repository is configured and does not silently download or replace itself.

@@ -248,44 +248,88 @@ class NebulaSettings {
     customInstall.textContent = state.victoryWorldInstalling && state.victoryInstallBuildId?.startsWith('custom-')
       ? 'Building custom runtime…' : 'Build and install';
     const actions = this.get('victory-build-actions');
-    const buildSet = staticBuilds.map(build => build.id).join('|');
+    const buildSet = [...staticBuilds, ...customBuilds].map(build => `${build.id}:${build.name}:${build.repository}`).join('|');
     if (actions.dataset.buildSet !== buildSet) {
       actions.dataset.buildSet = buildSet;
       actions.replaceChildren();
-      for (const build of staticBuilds) {
+      for (const build of [...staticBuilds, ...customBuilds]) {
+        const isCustom = customBuilds.some(item => item.id === build.id);
         const row = document.createElement('div');
         row.className = 'runtime-install-row';
+        row.dataset.runtime = build.id;
         const title = document.createElement('div');
         title.className = 'runtime-install-title';
         title.innerHTML = `<strong></strong><small></small>`;
         title.querySelector('strong').textContent = build.name;
-        title.querySelector('small').textContent = build.repository || 'Community runtime';
+        title.querySelector('small').textContent = `${build.repository || 'Community runtime'}${isCustom ? ' · Custom' : ''}`;
         const buttons = document.createElement('div');
         buttons.className = 'runtime-install-buttons';
-        const install = document.createElement('button');
-        install.type = 'button';
-        install.className = 'secondary';
-        install.textContent = 'Install';
-        install.addEventListener('click', () => this.send('install-victory-build', null, { runtime: build.id }));
-        const update = document.createElement('button');
-        update.type = 'button';
-        update.className = 'secondary';
-        update.textContent = 'Install Latest';
-        update.addEventListener('click', () => this.send('install-latest-victory-build', null, { runtime: build.id }));
-        buttons.append(install, update);
+        if (!isCustom) {
+          const install = document.createElement('button');
+          install.type = 'button';
+          install.className = 'secondary';
+          install.dataset.action = 'install';
+          install.textContent = 'Install';
+          install.addEventListener('click', () => this.send('install-victory-build', null, { runtime: build.id }));
+          const update = document.createElement('button');
+          update.type = 'button';
+          update.className = 'secondary';
+          update.dataset.action = 'update';
+          update.textContent = 'Install Latest';
+          update.addEventListener('click', () => this.send('install-latest-victory-build', null, { runtime: build.id }));
+          buttons.append(install, update);
+        }
+        const open = document.createElement('button');
+        open.type = 'button';
+        open.className = 'secondary';
+        open.dataset.action = 'open';
+        open.textContent = 'Open';
+        open.disabled = !build.installed;
+        open.title = build.installed ? 'Open this runtime’s installed folder' : 'Install this runtime to open its folder';
+        open.addEventListener('click', () => this.send('open-victory-runtime-folder', null, { runtime: build.id }));
+        buttons.append(open);
+        const uninstall = document.createElement('button');
+        uninstall.type = 'button';
+        uninstall.className = 'secondary danger';
+        uninstall.dataset.action = 'uninstall';
+        uninstall.textContent = 'Uninstall';
+        uninstall.disabled = !build.installed;
+        uninstall.title = build.installed ? 'Remove this runtime from Nebula' : 'This runtime is not installed';
+        uninstall.addEventListener('click', () => {
+          if (!build.installed) return;
+          if (window.confirm(`Uninstall ${build.name}? This removes its Nebula runtime files. Your game files are not affected.`))
+            this.send('uninstall-victory-runtime', null, { runtime: build.id });
+        });
+        buttons.append(uninstall);
         row.append(title, buttons);
         actions.append(row);
       }
     }
-    staticBuilds.forEach((build, index) => {
-      const row = actions.children[index];
-      const [install, update] = row.querySelectorAll('button');
+    for (const build of [...staticBuilds, ...customBuilds]) {
+      const row = [...actions.children].find(item => item.dataset.runtime === build.id);
+      if (!row) continue;
+      const install = row.querySelector('[data-action="install"]');
+      const update = row.querySelector('[data-action="update"]');
+      const open = row.querySelector('[data-action="open"]');
+      const uninstall = row.querySelector('[data-action="uninstall"]');
       const building = state.victoryWorldInstalling && state.victoryInstallBuildId === build.id;
-      install.disabled = Boolean(state.victoryWorldInstalling || build.installed);
-      install.textContent = build.installed ? 'Installed' : 'Install';
-      update.disabled = Boolean(state.victoryWorldInstalling);
-      update.textContent = building && state.victoryInstallLatest ? 'Building latest…' : 'Install Latest';
-    });
+      if (install) {
+        install.disabled = Boolean(state.victoryWorldInstalling || build.installed);
+        install.textContent = build.installed ? 'Installed' : 'Install';
+      }
+      if (update) {
+        update.disabled = Boolean(state.victoryWorldInstalling);
+        update.textContent = building && state.victoryInstallLatest ? 'Building latest…' : 'Install Latest';
+      }
+      if (open) {
+        open.disabled = !build.installed || state.victoryWorldInstalling;
+        open.title = build.installed ? 'Open this runtime’s installed folder' : 'Install this runtime to open its folder';
+      }
+      if (uninstall) {
+        uninstall.disabled = !build.installed || Boolean(state.victoryWorldInstalling);
+        uninstall.title = build.installed ? 'Remove this runtime from Nebula' : 'This runtime is not installed';
+      }
+    }
   }
 
   saveVictoryGraphics() {

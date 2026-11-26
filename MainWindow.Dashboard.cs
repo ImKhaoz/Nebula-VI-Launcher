@@ -274,6 +274,25 @@ public partial class MainWindow
                         ?? throw new DirectoryNotFoundException("The selected runtime folder could not be found.");
                     System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(selectedRuntimeFolder) { UseShellExecute = true })?.Dispose();
                     break;
+                case "open-victory-runtime-folder":
+                    var runtimeId = payload.ValueKind == JsonValueKind.Object &&
+                        payload.TryGetProperty("runtime", out var runtimeValue) && runtimeValue.ValueKind == JsonValueKind.String
+                            ? runtimeValue.GetString() : null;
+                    if (string.IsNullOrWhiteSpace(runtimeId) || !System.Text.RegularExpressions.Regex.IsMatch(runtimeId, "^(?:victory(?:-nvidia|-amd)?|victory-trustno1-nvidia|custom-[a-f0-9]{12})$"))
+                        throw new ArgumentException("The selected runtime ID is invalid.");
+                    var runtimeExecutable = FindVictoryRuntime(runtimeId)
+                        ?? throw new FileNotFoundException("This runtime is not installed yet.");
+                    var runtimeFolder = Path.GetDirectoryName(runtimeExecutable)
+                        ?? throw new DirectoryNotFoundException("The installed runtime folder could not be found.");
+                    System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(runtimeFolder) { UseShellExecute = true })?.Dispose();
+                    break;
+                case "uninstall-victory-runtime" when GtaOnlyEdition:
+                    var uninstallRuntimeId = payload.ValueKind == JsonValueKind.Object &&
+                        payload.TryGetProperty("runtime", out var uninstallRuntimeValue) && uninstallRuntimeValue.ValueKind == JsonValueKind.String
+                            ? uninstallRuntimeValue.GetString() : null;
+                    if (string.IsNullOrWhiteSpace(uninstallRuntimeId)) throw new ArgumentException("The selected runtime ID is invalid.");
+                    UninstallVictoryRuntime(uninstallRuntimeId);
+                    break;
                 case "reset-runtime":
                     _xvalkyriePath = null;
                     SaveSettings();

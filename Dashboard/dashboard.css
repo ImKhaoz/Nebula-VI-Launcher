@@ -998,6 +998,8 @@ button:is(.primary, .secondary, .layout-toggle):is(:hover, :active) { transform:
 .runtime-install-title strong { font-size: 14px; }
 .runtime-install-title small { overflow: hidden; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .runtime-install-buttons { display: flex; gap: 8px; }
+.runtime-install-buttons .danger { color:#ffc0c0; border-color:#ff8d8d45; }
+.runtime-install-buttons .danger:hover:not(:disabled) { background:#a52b3b38; border-color:#ff8d8d88; }
 #victory-build-actions { display: grid; gap: 0; }
 .custom-runtime-form {
   display: grid;

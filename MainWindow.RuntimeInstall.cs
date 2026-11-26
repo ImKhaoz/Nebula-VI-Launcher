@@ -241,6 +241,41 @@ public partial class MainWindow
         }
     }
 
+    private void UninstallVictoryRuntime(string id)
+    {
+        if (_victoryWorldInstalling) throw new InvalidOperationException("Wait for the current runtime build to finish before uninstalling a runtime.");
+
+        var root = Path.GetFullPath(LocalRuntimeFolder);
+        string? target = VictoryBuilds.TryGetValue(id, out var build)
+            ? Path.Combine(root, build.Directory)
+            : GetCustomVictoryRuntime(id) is not null && System.Text.RegularExpressions.Regex.IsMatch(id, "^custom-[a-f0-9]{12}$")
+                ? Path.Combine(root, id)
+                : null;
+        if (target is null) throw new ArgumentException("The selected runtime is not a removable Nebula Git build.");
+
+        target = Path.GetFullPath(target);
+        if (!string.Equals(Path.GetDirectoryName(target), root, StringComparison.OrdinalIgnoreCase))
+            throw new IOException("The runtime folder is outside Nebula’s managed runtime directory.");
+        if (!Directory.Exists(target) || !File.Exists(Path.Combine(target, "victory.exe")))
+            throw new DirectoryNotFoundException("The local runtime installation was not found. Bundled runtimes cannot be uninstalled.");
+        if ((File.GetAttributes(target) & FileAttributes.ReparsePoint) != 0)
+            throw new IOException("The runtime folder is a link and cannot be safely removed.");
+
+        var fallback = VictoryBuilds.Keys.FirstOrDefault(candidate => candidate != id && FindVictoryRuntime(candidate) is not null)
+            ?? GetCustomVictoryRuntimes().FirstOrDefault(candidate => candidate.Id != id)?.Id
+            ?? (FindXclRuntime() is not null && !GtaOnlyEdition ? "xcl" : "victory");
+        if (string.Equals(_gtaRuntime, id, StringComparison.OrdinalIgnoreCase))
+        {
+            _gtaRuntime = fallback;
+            SaveSettings();
+        }
+
+        Directory.Delete(target, recursive: true);
+        _victoryWorldInstallStatus = $"{(build?.Name ?? GetCustomVictoryRuntime(id)?.Name ?? "Runtime")} was uninstalled.";
+        PublishDashboardState();
+        ShowToast(_victoryWorldInstallStatus);
+    }
+
     private static async Task<string> RunRuntimeBuildStepAsync(string executable, string folder, CancellationToken cancellation, params string[] args)
     {
         cancellation.ThrowIfCancellationRequested();

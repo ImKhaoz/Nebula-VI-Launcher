@@ -1109,7 +1109,7 @@ host?.addEventListener('message', ({ data }) => {
   document.body.classList.toggle('gta-edition', gtaOnlyEdition);
   const editionLabel = document.querySelector('.gta-edition-label');
   editionLabel.hidden = !gtaOnlyEdition;
-  editionLabel.textContent = `VI Edition - ${data.launcherVersion || '0.1.0-preview.17'}`;
+  editionLabel.textContent = `VI Edition - ${data.launcherVersion || '0.1.0-preview.19'}`;
   if (gtaOnlyEdition) document.title = 'Nebula GTA VI Edition';
   selectedVictoryInstalled = Boolean(
     data.victoryBuilds?.some(build => build.installed && build.id === data.gtaRuntime) ||

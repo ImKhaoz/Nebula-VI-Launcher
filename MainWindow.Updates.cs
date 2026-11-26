@@ -9,7 +9,7 @@ public partial class MainWindow
     private static readonly HttpClient ReleaseHttp = CreateReleaseHttpClient();
     private static string LauncherVersion => typeof(MainWindow).Assembly
         .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion.Split('+')[0]
-        ?? "0.1.0-preview.17";
+        ?? "0.1.0-preview.19";
     private static string NebulaReleaseRepository => typeof(MainWindow).Assembly
         .GetCustomAttributes<AssemblyMetadataAttribute>()
         .FirstOrDefault(item => item.Key == "NebulaReleaseRepository")?.Value ?? "";
