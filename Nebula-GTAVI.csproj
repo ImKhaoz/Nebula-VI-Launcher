@@ -18,6 +18,7 @@
     <Resource Include="Assets\Nexus.ico" />
     <EmbeddedResource Include="tools\victory-world-nebula.patch" LogicalName="VictoryWorld.Nebula.patch" />
     <EmbeddedResource Include="tools\victory-nvidia-nebula.patch" LogicalName="VictoryNvidia.Nebula.patch" />
+    <EmbeddedResource Include="tools\victory-trustno1-nebula.patch" LogicalName="VictoryTrustNvidia.Nebula.patch" />
     <Content Include="Dashboard\**\*.html;Dashboard\**\*.css;Dashboard\**\*.js;Dashboard\**\*.svg;Dashboard\vendor\hls.js-LICENSE.txt"
              CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Assets\NexusLogo.png;Assets\NexusStartup.wav;Assets\NebulaWordmark.png;Assets\NebulaHeaderLettering.png"

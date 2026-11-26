@@ -36,9 +36,12 @@ Nebula keeps game setup, runtime selection, and shader preparation in one place.
 | --- | --- |
 | **VIctory World** | [ZSlayerHQ · `99f8834`](https://github.com/ZSlayerHQ/zslayer-pc-port-runtime/commit/99f8834aa16b98d7f3943b8de262a8d4857bda7b) |
 | **Nvidia 8g** | [soldsawn · `a14d8c8`](https://github.com/soldsawn/victory-nvidia-8gb/commit/a14d8c88c12dfb00e0c0361b99d3d44addc620de) |
+| **VIctory NVIDIA** | [trustno1-coder · `3e5fb36`](https://github.com/trustno1-coder/VIctory-NVIDIA/commit/3e5fb36392796602fce70aa7331f4100be9291af) |
 | **VIctory AMD** | [myokex · `070df42`](https://github.com/myokex/victory-amd/commit/070df424b0967dca422478a1f12afaaf6736ebdd) |
 
 Runtime builds can take several minutes. Nebula stores settings, installed runtimes, and caches in `%LOCALAPPDATA%\Nebula-GTAVI`. Launch logs are under `VIctory\launcher-logs` in that directory.
+
+For **VIctory NVIDIA**, the fork recommends the Series S profile. Set it under **Game setup → Advanced → Console profile**. Nebula enables the fork's Series S interface compositor and uses its `shaders` command to prepare a separate cache.
 
 ## Building from source
 

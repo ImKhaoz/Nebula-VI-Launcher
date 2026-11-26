@@ -6,6 +6,7 @@ namespace XboxEmulatorUI;
 public partial class MainWindow
 {
     private sealed record VictoryBuild(string Name, string Directory, string Repository, string Revision, string Patch, string? PatchInclude = null);
+    private const string TrustNvidiaRuntime = "victory-trustno1-nvidia";
 
     private static readonly IReadOnlyDictionary<string, VictoryBuild> VictoryBuilds = new Dictionary<string, VictoryBuild>
     {
@@ -13,6 +14,8 @@ public partial class MainWindow
             "99f8834aa16b98d7f3943b8de262a8d4857bda7b", "VictoryWorld.Nebula.patch"),
         ["victory-nvidia"] = new("Nvidia 8g", "victory-nvidia-8gb", "https://github.com/soldsawn/victory-nvidia-8gb.git",
             "a14d8c88c12dfb00e0c0361b99d3d44addc620de", "VictoryNvidia.Nebula.patch"),
+        [TrustNvidiaRuntime] = new("VIctory NVIDIA", "victory-trustno1-nvidia", "https://github.com/trustno1-coder/VIctory-NVIDIA.git",
+            "3e5fb36392796602fce70aa7331f4100be9291af", "VictoryTrustNvidia.Nebula.patch"),
         ["victory-amd"] = new("VIctory AMD", "victory-amd", "https://github.com/myokex/victory-amd.git",
             "070df424b0967dca422478a1f12afaaf6736ebdd", "VictoryWorld.Nebula.patch", "--include=apps/victory/src/translate.rs")
     };

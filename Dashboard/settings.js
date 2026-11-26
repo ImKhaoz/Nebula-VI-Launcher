@@ -189,9 +189,14 @@ class NebulaSettings {
   showEditionBuilds(state) {
     const select = this.get('gta-runtime');
     const installed = state.victoryBuilds.filter(build => build.installed);
-    for (const option of select.options) option.hidden = option.value !== '' && !installed.some(build => build.id === option.value);
-    const amd = this.get('gta-runtime-amd');
-    amd.disabled = !installed.some(build => build.id === amd.value);
+    for (const build of state.victoryBuilds) {
+      if (![...select.options].some(option => option.value === build.id))
+        select.add(new Option(build.name, build.id));
+    }
+    for (const option of select.options) {
+      if (!option.value) continue;
+      option.hidden = option.disabled = !installed.some(build => build.id === option.value);
+    }
     const selection = installed.find(build => build.id === state.gtaRuntime) || installed[0];
     select.value = selection?.id || '';
     select.disabled = !selection;

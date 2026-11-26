@@ -189,13 +189,7 @@ public partial class MainWindow
     private const string NvidiaVictoryLabel = "Nvidia 8g";
     private const string NvidiaAccountPickerHint = "Press Enter or controller A when Account Picker appears in the bottom-right corner.";
 
-    private static string GtaRuntimeLabel(string runtime) => runtime switch
-    {
-        "xcl" => "XCL",
-        "victory-nvidia" => NvidiaVictoryLabel,
-        "victory-amd" => VictoryBuilds["victory-amd"].Name,
-        _ => "VIctory World"
-    };
+    private static string GtaRuntimeLabel(string runtime) => runtime == "xcl" ? "XCL" : VictoryBuilds[runtime].Name;
 
     private static string? FindGtaRuntime(string runtime) => runtime == "xcl"
         ? FindXclRuntime() : FindVictoryRuntime(runtime);

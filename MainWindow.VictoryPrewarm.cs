@@ -14,6 +14,7 @@ public partial class MainWindow
         cache = Path.Combine(root, runtime switch
         {
             "victory-nvidia" => "nvidia-8gb-cache",
+            TrustNvidiaRuntime => "trustno1-nvidia-cache",
             "victory-amd" => "amd-cache",
             _ => "world-cache"
         });
@@ -38,6 +39,12 @@ public partial class MainWindow
             start.Environment["VICTORY_TEXTURE_DROP_MIPS"] = "2";
             start.Environment.TryAdd("VICTORY_TEXTURE_FLOOR_MB", "768");
             start.Environment.TryAdd("VICTORY_CARD_BUFFERS_MB", "512");
+        }
+        else if (runtime == TrustNvidiaRuntime)
+        {
+            // Keep the fork's Series S interface plane and NVIDIA descriptor headroom.
+            start.Environment.TryAdd("VICTORY_COMPOSE", "1");
+            start.Environment.TryAdd("VICTORY_DYNAMIC_SLOTS", "524288");
         }
         return start;
     }
@@ -76,9 +83,13 @@ public partial class MainWindow
                 runtimeLabel: nvidia ? NvidiaVictoryLabel : null);
             start.Environment["VICTORY_LOG"] = "warn";
             if (nvidia) start.Environment.Remove("VICTORY_WARM_SECONDS");
-            foreach (var argument in nvidia
-                ? new[] { "translate", archive.FullName, "--warm", "all", "--probe-host", "--jobs", "2" }
-                : new[] { "warm", archive.FullName, "--jobs", "2", "--no-pipelines" })
+            var arguments = runtime switch
+            {
+                "victory-nvidia" => new[] { "translate", archive.FullName, "--warm", "all", "--probe-host", "--jobs", "2" },
+                TrustNvidiaRuntime => new[] { "shaders", archive.FullName, "--jobs", "2" },
+                _ => new[] { "warm", archive.FullName, "--jobs", "2", "--no-pipelines" }
+            };
+            foreach (var argument in arguments)
                 start.ArgumentList.Add(argument);
 
             using var process = Process.Start(start) ?? throw new IOException("Could not start shader prewarming.");

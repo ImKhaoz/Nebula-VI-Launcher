@@ -264,8 +264,7 @@ public partial class MainWindow : Window
             _gtaRuntime = settings?.GtaRuntime switch
             {
                 "xcl" when !GtaOnlyEdition && FindXclRuntime() is not null => "xcl",
-                "victory-nvidia" when FindVictoryRuntime("victory-nvidia") is not null => "victory-nvidia",
-                "victory-amd" when GtaOnlyEdition && FindVictoryRuntime("victory-amd") is not null => "victory-amd",
+                { } runtime when VictoryBuilds.ContainsKey(runtime) && FindVictoryRuntime(runtime) is not null => runtime,
                 _ => "victory"
             };
             _xclFrameDiagnostics = settings?.XclFrameDiagnostics ?? false;

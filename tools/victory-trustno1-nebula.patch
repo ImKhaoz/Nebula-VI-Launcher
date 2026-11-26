@@ -1,0 +1,48 @@
+diff --git a/apps/victory/src/translate.rs b/apps/victory/src/translate.rs
+index faa68c1..0ee84e5 100644
+--- a/apps/victory/src/translate.rs
++++ b/apps/victory/src/translate.rs
+@@ -414,16 +414,29 @@ pub fn precompile(paths: Vec<PathBuf>, jobs: Option<usize>) -> Result<()> {
+             };
+             let jobs = sources(&data);
+             let next = AtomicUsize::new(0);
++            println!("warm-progress 0 {}", jobs.len());
+             std::thread::scope(|s| {
+                 for _ in 0..threads.min(jobs.len()) {
+                     s.spawn(|| {
+-                        while let Some(job) = jobs.get(next.fetch_add(1, Ordering::Relaxed)) {
++                        loop {
++                            let index = next.fetch_add(1, Ordering::Relaxed);
++                            let Some(job) = jobs.get(index) else { break };
++                            if index != 0 && index.is_multiple_of(64) {
++                                println!("warm-progress {index} {}", jobs.len());
++                            }
+                             let Some(bytes) = job.bytes() else { continue };
+-                            let hash = blake3::hash(&bytes);
++                            let Some(length) = bytes.get(0x18..0x1c).and_then(|size| size.try_into().ok()) else {
++                                continue;
++                            };
++                            // Cache the title's container without the archive bytes that follow it.
++                            let Some(bytes) = bytes.get(..u32::from_le_bytes(length) as usize) else {
++                                continue;
++                            };
++                            let hash = blake3::hash(bytes);
+                             if !lock(&seen).insert(hash) {
+                                 continue;
+                             }
+-                            match victory_hle::modules::d3d12x::precompile(&bytes) {
++                            match victory_hle::modules::d3d12x::precompile(bytes) {
+                                 Ok(_) => {
+                                     let n = done.fetch_add(1, Ordering::Relaxed) + 1;
+                                     if n.is_multiple_of(1000) {
+@@ -439,8 +452,10 @@ pub fn precompile(paths: Vec<PathBuf>, jobs: Option<usize>) -> Result<()> {
+                     });
+                 }
+             });
++            println!("warm-progress {0} {0}", jobs.len());
+         }
+     }
++    println!("warm-result {}", done.load(Ordering::Relaxed));
+     let failed = failed.into_inner().unwrap_or_else(|e| e.into_inner());
+     println!(
+         "{} shaders in the cache, {} do not translate, {:.0} s",
