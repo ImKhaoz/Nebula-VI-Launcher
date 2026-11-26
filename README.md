@@ -2,10 +2,10 @@
   <img src="Assets/NexusLogo.png" alt="Nebula logo" width="132">
 </p>
 
-<h1 align="center">Nebula · GTA VI Edition</h1>
+<h1 align="center">Nebula · VI Edition</h1>
 
 <p align="center">
-  A fullscreen Windows launcher for a local GTA VI package and community VIctory builds.
+  A fullscreen Windows launcher for a local VI package and community VIctory builds.
 </p>
 
 <p align="center">
@@ -25,8 +25,8 @@ Nebula keeps game setup, runtime selection, and shader preparation in one place.
 ## Getting started
 
 1. Extract the Windows x64 release and open **Nebula-GTAVI-Version.exe**. Install [Microsoft Edge WebView2](https://developer.microsoft.com/microsoft-edge/webview2/#download-section) if the dashboard cannot open.
-2. In **Game setup**, choose the root folder of the local GTA VI Xbox Series package you are authorized to use. Nebula detects the executable in that folder.
-3. Under **VIctory builds**, use **Install Git** and **Install Rust** if needed. Install [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) with **Desktop development with C++** and a Windows SDK.
+2. In **Game setup**, choose the root folder of the local VI package you are authorized to use. Nebula detects the executable in that folder.
+3. Under **VIctory builds**, use **Install Git** and **Install Rust** if needed. Install [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) with **Desktop development with C++** and a Windows SDK. You should be good to just press Install Git and Install Rust and it will do the work for you.
 4. Select **Install** beside a runtime. Nebula fetches its pinned source revision from GitHub and builds it locally. When it finishes, the build appears in the **Compatibility runtime** selector.
 5. Select an installed runtime and choose **Launch**. When pre-warming is needed, the launcher shows progress and saves the translated shaders for later launches with that build.
 
