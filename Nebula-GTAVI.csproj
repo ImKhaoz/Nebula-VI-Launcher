@@ -6,6 +6,10 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>Nebula-GTAVI-Version</AssemblyName>
+    <NebulaVersion Condition="'$(NebulaVersion)' == ''">0.1.0-preview.17</NebulaVersion>
+    <Version>$(NebulaVersion)</Version>
+    <InformationalVersion>$(NebulaVersion)</InformationalVersion>
+    <NebulaReleaseRepository Condition="'$(NebulaReleaseRepository)' == ''"></NebulaReleaseRepository>
     <Product>Nebula GTA VI Edition</Product>
     <Description>Local game launcher for the GTA VI Edition of Nebula</Description>
     <DefineConstants>$(DefineConstants);NEBULA_GTA_ONLY</DefineConstants>
@@ -13,6 +17,15 @@
     <RootNamespace>XboxEmulatorUI</RootNamespace>
     <DefaultItemExcludes>$(DefaultItemExcludes);tools/**;release/**</DefaultItemExcludes>
   </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <UseAppHost>true</UseAppHost>
+    <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
+  </PropertyGroup>
+  <ItemGroup>
+    <AssemblyMetadata Include="NebulaReleaseRepository" Value="$(NebulaReleaseRepository)" />
+  </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4370.26" />
     <Resource Include="Assets\Nexus.ico" />

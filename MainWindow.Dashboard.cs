@@ -117,27 +117,40 @@ public partial class MainWindow
         SendDashboardMessage(new
         {
             type = "state",
+            legalDisclaimerAccepted = _legalDisclaimerAccepted,
+            launcherVersion = LauncherVersion,
+            launcherUpdateUrl = LatestLauncherReleaseUrl,
             runtime = IsXvalkyrieAvailable(),
             startupSound = _startupSound,
             showIntro = _showIntro,
             recordingDelay = _recordingDelay,
             backgroundMotion = _backgroundMotion,
             videoPreview = _videoPreview,
+            developerMode = _developerMode,
+            prewarmShaders = _prewarmShaders,
             defaultLayout = _defaultLayout,
             victoryConsoleMode = _victoryConsoleMode,
             gtaRuntime = _gtaRuntime,
+            gtaResolution = _gtaResolution,
+            scarlettFoxRuntime = GtaOnlyEdition && IsScarlettFoxRuntime(_gtaRuntime),
+            scarlettRayTracing = _scarlettRayTracing,
+            gtaRuntimeFolderAvailable = FindGtaRuntime(_gtaRuntime) is not null,
             xclFrameDiagnostics = _xclFrameDiagnostics,
             xclPostRunPrecompile = _xclPostRunPrecompile,
             xclAvailable = FindXclRuntime() is not null,
             gtaOnlyEdition = GtaOnlyEdition,
             gitAvailable = GtaOnlyEdition && FindGitExecutable() is not null,
             rustAvailable = GtaOnlyEdition && FindCargoExecutable() is not null,
-            victoryBuilds = GtaOnlyEdition ? VictoryBuilds.Select(item => new { id = item.Key, name = item.Value.Name,
+            victoryBuilds = GtaOnlyEdition ? VictoryBuilds.Select(item => new { id = item.Key, name = item.Value.Name, repository = item.Value.Repository,
                 installed = FindVictoryRuntime(item.Key) is not null }) : null,
+            customVictoryBuilds = GtaOnlyEdition ? GetCustomVictoryRuntimes().Select(runtime => new { id = runtime.Id, name = runtime.Name,
+                repository = runtime.Repository, branch = runtime.Branch, installed = true }) : null,
             nvidiaVictoryAvailable = FindVictoryRuntime("victory-nvidia") is not null,
             victoryWorldAvailable = FindVictoryRuntime() is not null,
             victoryWorldInstalling = _victoryWorldInstalling,
             victoryWorldInstallStatus = _victoryWorldInstallStatus,
+            victoryInstallBuildId = _victoryInstallBuildId,
+            victoryInstallLatest = _victoryInstallLatest,
             diagnosticsAvailable = DeveloperDiagnosticsAvailable,
             xclStatus = GetXclStatus(),
             xclShaderBuild = _xclShaderBuildStatus,
@@ -229,6 +242,7 @@ public partial class MainWindow
                     if (_dashboardReady) break;
                     _dashboardReady = true;
                     PublishDashboardState();
+                    _ = CheckLauncherUpdateAsync();
                     await Task.WhenAny(PublishDashboardIconsAsync(), Task.Delay(1500));
                     if (!_dashboardFailed) SendDashboardMessage(new { type = "initial-library-ready" });
                     break;
@@ -246,11 +260,19 @@ public partial class MainWindow
                 case "clear-leonida": SetLeonidaFolder(null); break;
                 case "leonida-project": OpenWebPage("https://github.com/ItsNotRexed/Leonida"); break;
                 case "victory-project": OpenWebPage("https://github.com/ZSlayerHQ/victory-world-runtime/tree/next"); break;
-                case "victory-nvidia-project": OpenWebPage("https://github.com/soldsawn/victory-nvidia-8gb"); break;
+                case "victory-nvidia-project": OpenWebPage("https://github.com/ad3lre/victory-nvidia-8gb"); break;
+                case "save-developer-log": SaveDeveloperLog(payload); break;
                 case "xcl-project": OpenWebPage("https://github.com/ivall/xcl/releases"); break;
                 case "open-local-runtime-folder":
                     var xclFolder = Directory.CreateDirectory(Path.Combine(LocalRuntimeFolder, "xcl")).FullName;
                     System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(xclFolder) { UseShellExecute = true })?.Dispose();
+                    break;
+                case "open-selected-runtime-folder":
+                    var selectedRuntimeFile = FindGtaRuntime(_gtaRuntime)
+                        ?? throw new FileNotFoundException("The selected GTA VI runtime is not installed.");
+                    var selectedRuntimeFolder = Path.GetDirectoryName(selectedRuntimeFile)
+                        ?? throw new DirectoryNotFoundException("The selected runtime folder could not be found.");
+                    System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(selectedRuntimeFolder) { UseShellExecute = true })?.Dispose();
                     break;
                 case "reset-runtime":
                     _xvalkyriePath = null;
@@ -264,6 +286,12 @@ public partial class MainWindow
                 case "save-victory-graphics":
                     SaveVictoryGraphics(payload);
                     break;
+                case "save-gta-resolution":
+                    SaveGtaResolution(payload);
+                    break;
+                case "save-scarlett-ray-tracing":
+                    SaveScarlettRayTracing(payload);
+                    break;
                 case "save-gta-runtime":
                     SaveGtaRuntime(payload);
                     break;
@@ -273,8 +301,20 @@ public partial class MainWindow
                 case "install-victory-build" when GtaOnlyEdition:
                     await InstallVictoryBuildAsync(ReadOption(payload, "runtime"));
                     break;
+                case "install-latest-victory-build" when GtaOnlyEdition:
+                    await InstallVictoryBuildAsync(ReadOption(payload, "runtime"), latest: true);
+                    break;
+                case "install-custom-victory" when GtaOnlyEdition:
+                    await InstallCustomVictoryAsync(ReadOption(payload, "repository"), ReadOption(payload, "branch"));
+                    break;
                 case "install-runtime-prerequisite" when GtaOnlyEdition:
                     await InstallRuntimePrerequisiteAsync(ReadOption(payload, "tool"));
+                    break;
+                case "runtime-security-continue":
+                    _runtimeSecurityDecision?.TrySetResult(true);
+                    break;
+                case "runtime-security-cancel":
+                    _runtimeSecurityDecision?.TrySetResult(false);
                     break;
                 case "save-xcl-diagnostics":
                     SaveXclDiagnostics(payload);
@@ -289,8 +329,17 @@ public partial class MainWindow
                     CancelXclShaderBuild();
                     break;
                 case "cancel-launch-shaders":
+                    _skipLaunchPrewarm = false;
                     if (_victoryPrewarmCancellation is not null) _victoryPrewarmCancellation.Cancel();
                     else CancelXclShaderBuild();
+                    break;
+                case "skip-launch-prewarm":
+                    if (_prelaunchPreparing)
+                    {
+                        _skipLaunchPrewarm = true;
+                        _victoryPrewarmCancellation?.Cancel();
+                        _xclShaderBuildCts?.Cancel();
+                    }
                     break;
                 case "toggle-sound":
                     _startupSound = !_startupSound;
@@ -304,6 +353,17 @@ public partial class MainWindow
                     PublishDashboardState();
                     break;
                 case "close": Close(); break;
+                case "accept-legal-disclaimer" when GtaOnlyEdition:
+                    _legalDisclaimerAccepted = true;
+                    SaveSettings();
+                    PublishDashboardState();
+                    break;
+                case "decline-legal-disclaimer" when GtaOnlyEdition:
+                    Close();
+                    break;
+                case "open-launcher-update" when GtaOnlyEdition:
+                    OpenWebPage(LatestLauncherReleaseUrl);
+                    break;
                 case "drag":
                     if (WindowState == WindowState.Normal)
                     {

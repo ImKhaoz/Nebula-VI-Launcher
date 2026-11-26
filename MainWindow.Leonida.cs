@@ -124,6 +124,7 @@ public partial class MainWindow
                 while (await reader.ReadLineAsync() is { } line)
                 {
                     var text = line.Trim();
+                    SendDeveloperLog("XCL shader prewarm", text);
                     if (text.StartsWith("precompiling ", StringComparison.OrdinalIgnoreCase))
                     {
                         var number = text.Split(' ', StringSplitOptions.RemoveEmptyEntries).ElementAtOrDefault(1);
@@ -186,10 +187,56 @@ public partial class MainWindow
         ShowToast("GTA VI graphics profile saved for the next launch.");
     }
 
+    private static string NormalizeGtaResolution(string? resolution) => resolution switch
+    {
+        "3840x2160" or "2560x1440" or "1920x1080" or "1280x720" => resolution,
+        _ => "1920x1080"
+    };
+
+    private void SaveGtaResolution(JsonElement value)
+    {
+        var resolution = NormalizeGtaResolution(ReadOption(value, "resolution"));
+        if (!IsScarlettFoxRuntime(_gtaRuntime))
+            throw new InvalidOperationException("Select the Scarlett-Fox runtime to configure its game resolution.");
+        var previous = _gtaResolution;
+        _gtaResolution = resolution;
+        try { SaveSettings(); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            _gtaResolution = previous;
+            throw;
+        }
+        PublishDashboardState();
+        ShowToast($"Scarlett-Fox will use {resolution} on the next launch.");
+    }
+
+    private void SaveScarlettRayTracing(JsonElement value)
+    {
+        if (!IsScarlettFoxRuntime(_gtaRuntime))
+            throw new InvalidOperationException("Select the Scarlett-Fox runtime to configure ray tracing.");
+        var enabled = value.ValueKind == JsonValueKind.Object &&
+            value.TryGetProperty("enabled", out var enabledValue) &&
+            enabledValue.ValueKind == JsonValueKind.True;
+        var previous = _scarlettRayTracing;
+        _scarlettRayTracing = enabled;
+        try { SaveSettings(); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            _scarlettRayTracing = previous;
+            throw;
+        }
+        PublishDashboardState();
+        ShowToast(enabled
+            ? "Scarlett-Fox ray tracing is enabled for the next launch. Expect lower frame rates."
+            : "Scarlett-Fox ray tracing is disabled for the next launch. The lightweight ambient fill remains enabled.");
+    }
+
     private const string NvidiaVictoryLabel = "Nvidia 8g";
     private const string NvidiaAccountPickerHint = "Press Enter or controller A when Account Picker appears in the bottom-right corner.";
 
-    private static string GtaRuntimeLabel(string runtime) => runtime == "xcl" ? "XCL" : VictoryBuilds[runtime].Name;
+    private static string GtaRuntimeLabel(string runtime) => runtime == "xcl" ? "XCL"
+        : VictoryBuilds.TryGetValue(runtime, out var build) ? build.Name
+        : GetCustomVictoryRuntime(runtime)?.Name ?? "Custom VIctory";
 
     private static string? FindGtaRuntime(string runtime) => runtime == "xcl"
         ? FindXclRuntime() : FindVictoryRuntime(runtime);
@@ -197,7 +244,7 @@ public partial class MainWindow
     private void SaveGtaRuntime(JsonElement value)
     {
         var runtime = ReadOption(value, "runtime");
-        if (!VictoryBuilds.ContainsKey(runtime) && runtime != "xcl") return;
+        if (!VictoryBuilds.ContainsKey(runtime) && runtime != "xcl" && GetCustomVictoryRuntime(runtime) is null) return;
         if (GtaOnlyEdition ? runtime == "xcl" : runtime == "victory-amd") return;
         var label = GtaRuntimeLabel(runtime);
         if (FindGtaRuntime(runtime) is null)
@@ -225,9 +272,11 @@ public partial class MainWindow
         var executable = FindGtaRuntime(_gtaRuntime)
             ?? throw new FileNotFoundException($"{runtime} is unavailable. Check GTA VI runtime settings.");
         _prelaunchPreparing = true;
+        _skipLaunchPrewarm = false;
+        var skippedPrewarm = false;
         try
         {
-            if (useXcl)
+            if (_prewarmShaders && useXcl)
             {
                 var folder = Path.GetDirectoryName(game.ExecutablePath)!;
                 var cache = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
@@ -237,17 +286,36 @@ public partial class MainWindow
                 {
                     SetGtaLaunchSplash("shaders", "Scanning the game’s shader archive…");
                     await BuildXclShaderCacheAsync(folder);
-                    if (_xclShaderBuildStatus.Status != "complete")
+                    if (_skipLaunchPrewarm)
+                    {
+                        skippedPrewarm = true;
+                        _skipLaunchPrewarm = false;
+                    }
+                    else if (_xclShaderBuildStatus.Status != "complete")
                     {
                         ShowToast(_xclShaderBuildStatus.Message);
                         return;
                     }
                 }
+                else if (hasCache)
+                    SendDeveloperLog("Shader prewarm", "XCL's persistent DXIL cache is populated; using it without rebuilding.");
+                else
+                    SendDeveloperLog("Shader prewarm", "XCL pre-warm was skipped because shaders.rpf is missing.");
             }
-            else if (!await PrewarmVictoryAsync(executable, game.ExecutablePath, selectedRuntime))
-                return;
+            else if (_prewarmShaders)
+            {
+                var prewarm = await PrewarmVictoryAsync(executable, game.ExecutablePath, selectedRuntime);
+                if (prewarm == VictoryPrewarmResult.CancelLaunch) return;
+                skippedPrewarm = prewarm == VictoryPrewarmResult.Skipped;
+            }
+            else
+                SendDeveloperLog("Prewarm", "Shader pre-warming is disabled in Settings; launching with the runtime's existing cache.");
 
-            var openingMessage = useXcl
+            var openingMessage = skippedPrewarm
+                ? "Shader pre-warming was skipped. Shaders will compile as you play."
+                : !_prewarmShaders
+                ? "Shader pre-warming is disabled in Settings. Shaders may compile as you play."
+                : useXcl
                 ? "Waiting for the game window. Shaders may compile as you play."
                 : nvidia ? NvidiaAccountPickerHint : "The game window may stay black while it reads the package.";
             SetGtaLaunchSplash("opening", openingMessage, runtimeLabel: nvidia ? NvidiaVictoryLabel : null);
@@ -257,6 +325,7 @@ public partial class MainWindow
         finally
         {
             _prelaunchPreparing = false;
+            _skipLaunchPrewarm = false;
             SetGtaLaunchSplash("closed");
         }
     }
@@ -329,8 +398,8 @@ public partial class MainWindow
         RefreshLibrary();
 
 
-        var stdout = DrainRuntimeOutputAsync(process.StandardOutput, stdoutPath);
-        var stderr = DrainRuntimeOutputAsync(process.StandardError, stderrPath);
+        var stdout = DrainRuntimeOutputAndForwardAsync(process.StandardOutput, stdoutPath, "XCL");
+        var stderr = DrainRuntimeOutputAndForwardAsync(process.StandardError, stderrPath, "XCL");
         await TrackGameSessionAsync(process);
         await Task.WhenAll(stdout, stderr);
         if (_xclPostRunPrecompile && File.Exists(Path.Combine(Path.GetDirectoryName(gameExecutable)!, "shaders.rpf")))
@@ -466,6 +535,26 @@ public partial class MainWindow
         await reader.BaseStream.CopyToAsync(output);
     }
 
+    private async Task DrainRuntimeOutputAndForwardAsync(StreamReader reader, string path, string source)
+    {
+        await using var output = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.Read);
+        await using var writer = new StreamWriter(output, new System.Text.UTF8Encoding(false));
+        while (await reader.ReadLineAsync() is { } line)
+        {
+            await writer.WriteLineAsync(line);
+            SendDeveloperLog(source, line);
+        }
+    }
+
+    private void SendDeveloperLog(string source, string line)
+    {
+        if (!_developerMode || string.IsNullOrWhiteSpace(line)) return;
+        if (!new[] { "fps", "draw", "frame", "shader", "pipeline", "pso", "translate", "cache", "error", "warn", "present", "crash", "warm", "precomp" }
+            .Any(term => line.Contains(term, StringComparison.OrdinalIgnoreCase))) return;
+        var message = line.Length > 900 ? line[..900] + " …" : line;
+        SendDashboardMessage(new { type = "developer-log", source, message });
+    }
+
     private async Task LaunchVictoryAsync(string executable, string gameExecutable, string runtime)
     {
         var nvidia = runtime == "victory-nvidia";
@@ -486,24 +575,29 @@ public partial class MainWindow
             start.Environment.TryAdd("VICTORY_TEXTURE_NO_WAIT", "1");
             start.Environment.TryAdd("VICTORY_CARD_REHASH_RUNS", "1");
         }
+        SendDeveloperLog("Runtime", $"Starting {runtime} · {Path.GetFileName(executable)}");
         start.ArgumentList.Add("run");
         start.ArgumentList.Add(gameExecutable);
         start.ArgumentList.Add("--console");
         start.ArgumentList.Add(_victoryConsoleMode);
+        if (nvidia) start.ArgumentList.Add("--no-telemetry");
         start.ArgumentList.Add("--execute");
         using var process = Process.Start(start) ?? throw new IOException("VIctory could not start.");
         var stderrPath = Path.Combine(logDirectory, $"{logName}.stderr.log");
         await Task.WhenAll(
             TrackGameSessionAsync(process, nvidia ? NvidiaAccountPickerHint : null),
-            DrainRuntimeOutputAsync(process.StandardOutput, Path.Combine(logDirectory, $"{logName}.stdout.log")),
-            DrainRuntimeOutputAsync(process.StandardError, stderrPath));
+            DrainRuntimeOutputAndForwardAsync(process.StandardOutput, Path.Combine(logDirectory, $"{logName}.stdout.log"), runtime),
+            DrainRuntimeOutputAndForwardAsync(process.StandardError, stderrPath, runtime));
         if (IsLoaded)
         {
             IEnumerable<string> errors = process.ExitCode == 0 ? [] : File.ReadLines(stderrPath);
             if (errors.Any(line => line.Contains("LLVM ERROR: out of memory", StringComparison.Ordinal)))
                 ShowToast("The graphics compiler ran out of memory while building pipelines. See the latest launch log.");
             else if (errors.Any(line => line.Contains("Windows commit limit reached", StringComparison.Ordinal)))
-                ShowToast("Windows ran out of committed memory. Close other memory-heavy apps and retry.");
+                ShowToast("Windows reached its commit limit during startup. Close memory-heavy apps, lower Scarlett-Fox resolution, and increase the Windows paging file before retrying.");
+            else if (errors.Any(line => line.Contains("0x8007000E", StringComparison.Ordinal) ||
+                                        line.Contains("Failed to allocate upload buffer", StringComparison.Ordinal)))
+                ShowToast("Scarlett-Fox could not allocate D3D12 memory during startup. Lower its resolution and check available RAM, VRAM, and Windows paging-file space.");
             else if (process.ExitCode == unchecked((int)0x80000003))
                 ShowToast("GTA VI stopped at an internal breakpoint (0x80000003). See the latest launch log.");
             else

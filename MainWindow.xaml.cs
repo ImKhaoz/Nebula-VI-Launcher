@@ -27,6 +27,8 @@ public partial class MainWindow : Window
     private readonly List<GameEntry> _games = [];
     private string? _xvalkyriePath;
     private string _gtaRuntime = "victory";
+    private string _gtaResolution = "1920x1080";
+    private bool _scarlettRayTracing;
     private bool _xclFrameDiagnostics;
     private bool _xclPostRunPrecompile = true;
     private bool _recentOnly;
@@ -37,7 +39,11 @@ public partial class MainWindow : Window
     private long _recordingDelayStarted;
     private bool _backgroundMotion = true;
     private bool _videoPreview = true;
+    private bool _developerMode;
+    private bool _prewarmShaders = true;
+    private readonly DispatcherTimer _developerTelemetryTimer = new() { Interval = TimeSpan.FromSeconds(3) };
     private string _defaultLayout = "carousel";
+    private bool _legalDisclaimerAccepted;
     private System.Media.SoundPlayer? _introSound;
     private bool _introFinished;
     private GameEntry? _featured;
@@ -47,7 +53,11 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         if (GtaOnlyEdition) Title = "Nebula — GTA VI";
-        Closed += (_, _) => _victoryPrewarmCancellation?.Cancel();
+        Closed += (_, _) =>
+        {
+            _victoryPrewarmCancellation?.Cancel();
+            _runtimeSecurityDecision?.TrySetCanceled();
+        };
         WindowAppearance.UseDarkFrame(this, borderless: true);
         var artwork = Path.Combine(AppContext.BaseDirectory, "Assets", "NexusBackdrop.png");
         if (File.Exists(artwork))
@@ -65,6 +75,15 @@ public partial class MainWindow : Window
             SplashFallback.Visibility = Visibility.Collapsed;
         }
         _toastTimer.Tick += (_, _) => { Toast.Visibility = Visibility.Collapsed; _toastTimer.Stop(); };
+        _developerTelemetryTimer.Tick += (_, _) =>
+        {
+            if (!_dashboardReady || !_developerMode) return;
+            try { SendDashboardMessage(new { type = "developer-telemetry", xclStatus = GetXclStatus() }); }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidOperationException)
+            {
+                LogDashboard($"Developer telemetry refresh skipped: {error.GetType().Name}.");
+            }
+        };
         LoadLibrary();
         if (GtaOnlyEdition)
         {
@@ -73,11 +92,13 @@ public partial class MainWindow : Window
             _games.Add(game);
         }
         LoadSettings();
+        if (_developerMode) _developerTelemetryTimer.Start();
         if (GtaOnlyEdition)
         {
             _games[0].ExecutablePath = GetLeonidaCandidate() ?? "";
             if (FindGtaRuntime(_gtaRuntime) is null)
-                _gtaRuntime = VictoryBuilds.Keys.FirstOrDefault(id => FindVictoryRuntime(id) is not null) ?? "victory";
+                _gtaRuntime = VictoryBuilds.Keys.FirstOrDefault(id => FindVictoryRuntime(id) is not null)
+                    ?? GetCustomVictoryRuntimes().FirstOrDefault()?.Id ?? "victory";
         }
         _leonidaAvailabilityTimer.Tick += (_, _) => RefreshLeonidaAvailability();
         _leonidaAvailabilityTimer.Start();
@@ -257,6 +278,9 @@ public partial class MainWindow : Window
             _recordingDelay = settings?.RecordingDelay ?? false;
             _backgroundMotion = settings?.BackgroundMotion ?? true;
             _videoPreview = settings?.VideoPreview ?? true;
+            _developerMode = settings?.DeveloperMode ?? false;
+            _prewarmShaders = settings?.PrewarmShaders ?? true;
+            _legalDisclaimerAccepted = settings?.LegalDisclaimerAccepted ?? false;
             _defaultLayout = settings?.DefaultLayout == "grid" ? "grid" : "carousel";
             _leonidaGameFolder = settings?.LeonidaGameFolder;
             // Older settings saved Series S by default, even when no profile had been chosen.
@@ -264,9 +288,11 @@ public partial class MainWindow : Window
             _gtaRuntime = settings?.GtaRuntime switch
             {
                 "xcl" when !GtaOnlyEdition && FindXclRuntime() is not null => "xcl",
-                { } runtime when VictoryBuilds.ContainsKey(runtime) && FindVictoryRuntime(runtime) is not null => runtime,
+                { } runtime when FindGtaRuntime(runtime) is not null => runtime,
                 _ => "victory"
             };
+            _gtaResolution = NormalizeGtaResolution(settings?.GtaResolution);
+            _scarlettRayTracing = settings?.ScarlettRayTracing ?? false;
             _xclFrameDiagnostics = settings?.XclFrameDiagnostics ?? false;
             _xclPostRunPrecompile = settings?.XclPostRunPrecompile ?? true;
             if (_gtaRuntime == "xcl" && FindXclRuntime() is null) _gtaRuntime = "victory";
@@ -282,12 +308,15 @@ public partial class MainWindow : Window
     {
         XvalkyriePath = _xvalkyriePath, StartupSound = _startupSound,
         ShowIntro = _showIntro, RecordingDelay = _recordingDelay, BackgroundMotion = _backgroundMotion,
-        VideoPreview = _videoPreview, DefaultLayout = _defaultLayout,
+        VideoPreview = _videoPreview, DeveloperMode = _developerMode, PrewarmShaders = _prewarmShaders, DefaultLayout = _defaultLayout,
         LeonidaGameFolder = _leonidaGameFolder,
         VictoryConsoleProfile = _victoryConsoleMode,
         GtaRuntime = _gtaRuntime,
+        GtaResolution = _gtaResolution,
+        ScarlettRayTracing = _scarlettRayTracing,
         XclFrameDiagnostics = _xclFrameDiagnostics,
-        XclPostRunPrecompile = _xclPostRunPrecompile
+        XclPostRunPrecompile = _xclPostRunPrecompile,
+        LegalDisclaimerAccepted = _legalDisclaimerAccepted
     });
 
     private void RefreshRuntimeStatus()
@@ -312,11 +341,14 @@ public partial class MainWindow : Window
 
     private static string? FindVictoryRuntime(string runtime = "victory")
     {
-        var directory = VictoryBuilds[runtime].Directory;
-        var installed = Path.Combine(LocalRuntimeFolder, directory, "victory.exe");
-        if (File.Exists(installed)) return installed;
-        var executable = Path.Combine(AppContext.BaseDirectory, "runtimes", directory, "victory.exe");
-        return File.Exists(executable) ? executable : null;
+        if (VictoryBuilds.TryGetValue(runtime, out var build))
+        {
+            var installed = Path.Combine(LocalRuntimeFolder, build.Directory, "victory.exe");
+            if (File.Exists(installed)) return installed;
+            var executable = Path.Combine(AppContext.BaseDirectory, "runtimes", build.Directory, "victory.exe");
+            return File.Exists(executable) ? executable : null;
+        }
+        return FindCustomVictoryRuntime(runtime);
     }
 
     private static string? FindXclRuntime()
@@ -618,11 +650,16 @@ public partial class MainWindow : Window
         public bool RecordingDelay { get; set; }
         public bool BackgroundMotion { get; set; } = true;
         public bool VideoPreview { get; set; } = true;
+        public bool DeveloperMode { get; set; }
+        public bool PrewarmShaders { get; set; } = true;
         public string DefaultLayout { get; set; } = "carousel";
         public string? LeonidaGameFolder { get; set; }
         public string? VictoryConsoleProfile { get; set; }
         public string GtaRuntime { get; set; } = "victory";
+        public string? GtaResolution { get; set; }
+        public bool? ScarlettRayTracing { get; set; }
         public bool XclFrameDiagnostics { get; set; }
         public bool XclPostRunPrecompile { get; set; } = true;
+        public bool LegalDisclaimerAccepted { get; set; }
     }
 }

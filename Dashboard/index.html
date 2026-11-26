@@ -33,7 +33,7 @@
       <button data-view="games" aria-current="page">Games</button>
       <button data-view="recent">Recent</button>
     </nav>
-    <span class="gta-edition-label" hidden>GTA VI Edition</span>
+    <span class="gta-edition-label" hidden>VI Edition - 0.1.0-preview.17</span>
     <div class="utilities">
       <button class="icon" id="search-toggle" title="Search games" aria-label="Search games" aria-expanded="false"><svg viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></svg></button>
       <button class="icon" id="open-settings" title="Launcher settings" aria-label="Launcher settings"><svg viewBox="0 0 24 24"><path d="M12 3v3m0 12v3M3 12h3m12 0h3M5.6 5.6l2.1 2.1m8.6 8.6 2.1 2.1m0-12.8-2.1 2.1m-8.6 8.6-2.1 2.1"/><circle cx="12" cy="12" r="6"/></svg></button>
@@ -46,6 +46,10 @@
       <button data-action="close" class="close" aria-label="Close launcher">×</button>
     </div>
   </header>
+  <aside id="launcher-update" class="launcher-update" aria-label="Launcher update" hidden>
+    <div><strong id="launcher-update-title"></strong><small id="launcher-update-details"></small></div>
+    <button id="launcher-update-open" type="button" class="secondary">View release ↗</button>
+  </aside>
   <main id="library-screen">
     <section class="collection" aria-labelledby="rail-title">
       <div class="collection-heading">
@@ -130,6 +134,17 @@
     </section>
   </main>
   <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+  <dialog id="runtime-security-dialog" class="runtime-security-dialog" aria-labelledby="runtime-security-title" aria-describedby="runtime-security-summary">
+    <h2 id="runtime-security-title">Review runtime scan</h2>
+    <p id="runtime-security-name"></p>
+    <p id="runtime-security-summary"></p>
+    <section id="runtime-security-findings" class="runtime-security-findings" aria-live="polite"></section>
+    <p>Continuing runs build scripts from this repository on your PC. Continue only if you trust its source.</p>
+    <div class="actions">
+      <button id="runtime-security-cancel" class="secondary" type="button">Cancel install</button>
+      <button id="runtime-security-continue" class="primary" type="button">Continue anyway</button>
+    </div>
+  </dialog>
   <dialog id="prelaunch" class="launch-splash" aria-labelledby="prelaunch-title" aria-describedby="prelaunch-status">
     <section class="launch-content">
       <div class="launch-brand" role="img" aria-label="Nebula">
@@ -140,8 +155,15 @@
       <div class="launch-progress-header"><strong id="prelaunch-stage" role="status">Prewarming shaders</strong><span id="prelaunch-metric"></span></div>
       <progress id="prelaunch-progress" class="shader-progress" max="100" aria-labelledby="prelaunch-stage"></progress>
       <p id="prelaunch-status" role="status"></p>
-      <button id="prelaunch-cancel" class="secondary" type="button">Cancel launch</button>
+      <div class="launch-actions">
+        <button id="prelaunch-cancel" class="secondary" type="button">Cancel launch</button>
+        <button id="prelaunch-skip" class="primary" type="button" hidden>Skip pre-warming</button>
+      </div>
     </section>
+    <aside id="prelaunch-developer-console" class="developer-console launch-developer-console" aria-label="Developer console" hidden>
+      <div class="developer-console-heading"><strong>Developer Console</strong><span class="developer-console-actions"><button type="button" class="text-link developer-console-minimize" aria-expanded="true" title="Minimize console">Minimize</button><button type="button" class="text-link developer-console-expand" aria-pressed="false" title="Expand console">Expand</button><button type="button" class="text-link developer-console-save">Save log</button><button type="button" class="text-link developer-console-clear">Clear</button></span></div>
+      <pre id="prelaunch-console-output" aria-live="polite"></pre>
+    </aside>
   </dialog>
   <section class="settings-screen" id="settings-screen" role="main" aria-labelledby="settings-title" hidden>
     <div class="settings-shell">
@@ -153,7 +175,7 @@
         <nav class="settings-nav" aria-label="Settings categories">
           <button type="button" data-settings-page="preferences" aria-current="page">Preferences</button>
           <button type="button" data-settings-page="runtime" hidden>Compatibility settings</button>
-          <button type="button" data-settings-page="leonida" hidden>GTA VI setup</button>
+          <button type="button" data-settings-page="leonida" hidden>VI Setup</button>
           <button type="button" data-settings-page="game" id="game-settings-nav" hidden>Game settings</button>
         </nav>
         <div class="settings-content">
@@ -165,6 +187,8 @@
             <h3>Dashboard</h3>
             <label class="setting-row"><span><strong>Animated background</strong><small>Follows your Windows reduced-motion preference.</small></span><input class="switch" type="checkbox" id="pref-motion"></label>
             <label class="setting-row"><span><strong>Background video previews</strong><small>Play muted video for selected and hovered games when available.</small></span><input class="switch" type="checkbox" id="pref-video-preview"></label>
+            <label class="setting-row"><span><strong>Pre-warm shaders before launch</strong><small>Prepare available shader and pipeline caches for every selected runtime.</small></span><input class="switch" type="checkbox" id="pref-prewarm-shaders"></label>
+            <label class="setting-row"><span><strong>Developer Mode</strong><small>Show live shader progress and runtime FPS/draw logs when the selected runtime reports them.</small></span><input class="switch" type="checkbox" id="pref-developer-mode"></label>
             <label class="setting-row"><span><strong>Default library view</strong></span><select id="pref-layout"><option value="grid">Grid</option><option value="carousel">Carousel</option></select></label>
             <div class="actions settings-actions"><button class="primary" type="submit">Save preferences</button></div>
           </form>
@@ -187,14 +211,30 @@
             </div>
             <div class="setting-row">
               <div><label for="gta-runtime" class="setting-label">Compatibility runtime</label><small>Experimental. Each runtime uses its own shader cache.</small></div>
-              <select id="gta-runtime">
-                <option value="" disabled>Select an installed runtime</option>
-                <option id="gta-runtime-world" value="victory">VIctory World</option>
-                <option id="gta-runtime-nvidia" value="victory-nvidia">Nvidia 8g</option>
-                <option id="gta-runtime-amd" value="victory-amd" hidden disabled>VIctory AMD</option>
-                <option id="gta-runtime-xcl" value="xcl">XCL</option>
+              <div class="actions runtime-choice-actions">
+                <select id="gta-runtime">
+                  <option value="" disabled>Select an installed runtime</option>
+                  <option id="gta-runtime-world" value="victory">VIctory World</option>
+                  <option id="gta-runtime-nvidia" value="victory-nvidia">Nvidia 8g</option>
+                  <option id="gta-runtime-amd" value="victory-amd" hidden disabled>VIctory AMD</option>
+                  <option id="gta-runtime-xcl" value="xcl">XCL</option>
+                </select>
+                <button class="secondary" type="button" id="open-selected-runtime-folder">Open runtime folder</button>
+              </div>
+            </div>
+            <div class="setting-row" id="scarlett-resolution-row" hidden>
+              <div><label for="scarlett-resolution" class="setting-label">Game resolution</label><small>Scarlett-Fox reports this display mode to the game and caps its window to match. Applies on the next launch.</small></div>
+              <select id="scarlett-resolution">
+                <option value="3840x2160">3840 × 2160</option>
+                <option value="2560x1440">2560 × 1440</option>
+                <option value="1920x1080">1920 × 1080 · recommended</option>
+                <option value="1280x720">1280 × 720</option>
               </select>
             </div>
+            <label class="setting-row" id="scarlett-ray-tracing-row" hidden>
+              <span><strong>Ray-traced lighting</strong><small>Off is recommended for your RTX 3050 6 GB. Enabling the fork’s ray-tracing builder can cost about one-third of performance; off uses lightweight ambient fill instead and makes deep shadows less accurate.</small></span>
+              <input class="switch" type="checkbox" id="scarlett-ray-tracing">
+            </label>
             <form id="victory-world-install" class="setting-block" hidden>
               <label for="victory-world-repository" class="setting-label">VIctory World repository</label>
               <small>Install locally with Git, Rust, and Visual Studio C++ Build Tools.</small>
@@ -209,6 +249,14 @@
                 <button type="button" class="secondary" id="install-runtime-rust">Install Rust</button>
               </div>
               <div class="actions settings-actions" id="victory-build-actions"></div>
+              <form id="custom-runtime-form" class="custom-runtime-form">
+                <div class="custom-runtime-heading"><strong>Custom runtime repository</strong><small>Build a compatible public GitHub VIctory fork. Requires a Rust workspace with a package named <code>victory</code> and a `run` command.</small></div>
+                <div class="custom-runtime-fields">
+                  <label><span>GitHub repository</span><input type="url" id="custom-runtime-repository" placeholder="https://github.com/owner/repository" maxlength="240" autocomplete="off" required></label>
+                  <label><span>Branch <small>(optional)</small></span><input type="text" id="custom-runtime-branch" placeholder="Default branch" maxlength="96" autocomplete="off"></label>
+                </div>
+                <div class="actions settings-actions"><button type="submit" class="secondary" id="custom-runtime-install">Build and install</button><small>Only install repositories you trust. Their build scripts run on this PC.</small></div>
+              </form>
             </div>
             <p id="victory-world-install-status" role="status" hidden></p>
             <details class="gta-advanced">
@@ -265,10 +313,55 @@
     </div>
   </section>
   <footer>
-    <div class="footer-credit">GTA6 Modding Community</div>
+    <div class="footer-credit"><img src="../Assets/NexusLogo.png" alt="" width="20" height="20"><span>Nebula VI Edition by Kriz &amp; The Community</span></div>
     <div class="hints" id="library-hints"><kbd>←</kbd><kbd>→</kbd> <span>Browse</span><kbd id="activity-key">↓</kbd> <span id="activity-key-label">Activity</span><kbd>Enter</kbd> <span>Select</span></div>
     <div class="hints" id="settings-hints" hidden><kbd>↑</kbd><kbd>↓</kbd> <span>Categories</span><kbd>Tab</kbd> <span>Controls</span><kbd>Esc</kbd> <span>Back</span></div>
+    <a class="footer-repository" href="https://github.com/ImKhaoz/Nebula-VI-Launcher" target="_blank" rel="noreferrer">Repository ↗</a>
   </footer>
+  <dialog id="legal-disclaimer" class="legal-disclaimer" aria-labelledby="legal-title">
+    <div class="legal-heading">
+      <img src="../Assets/NexusLogo.png" alt="" width="58">
+      <div><h2 id="legal-title">Nebula GTA VI Launcher — Legal Disclaimer</h2><p><strong>Last Updated: November 25, 2026</strong></p></div>
+    </div>
+    <div class="legal-copy" tabindex="0" aria-label="Disclaimer text">
+      <h3>1. Independence and Non-Affiliation</h3>
+      <p>Nebula is an independently developed, third-party launcher. Nebula, its developers, contributors, and maintainers are not affiliated with, associated with, sponsored by, endorsed by, or employed by Rockstar Games, Take-Two Interactive Software, Inc., or any of their respective subsidiaries or affiliates.</p>
+      <p>Grand Theft Auto, GTA VI, Rockstar Games, and all associated trademarks, intellectual property, and copyrighted materials remain the property of their respective owners.</p>
+      <h3>2. Piracy and Unauthorized Distribution</h3>
+      <p>Nebula does not promote, encourage, condone, or support piracy, theft, unauthorized distribution, or copyright infringement in any form.</p>
+      <p>Nebula does not include, host, distribute, or provide proprietary game files, copyrighted game assets, or unauthorized copies of Grand Theft Auto VI within its official releases.</p>
+      <p>Users are solely responsible for obtaining and providing their own legally acquired game files. Users must possess the appropriate rights and permissions to use any files supplied to the launcher.</p>
+      <h3>3. User Responsibility</h3>
+      <p>By downloading, installing, accessing, or using Nebula, you acknowledge that you are doing so voluntarily and at your own risk.</p>
+      <p>You are responsible for:</p>
+      <ul>
+        <li>Understanding the functionality and intended purpose of the software.</li>
+        <li>Providing your own legally obtained and authorized game files.</li>
+        <li>Complying with applicable laws, licensing agreements, and third-party terms of service.</li>
+        <li>Maintaining backups of your personal and game-related files.</li>
+        <li>Ensuring your use of Nebula does not infringe upon the rights of any third party.</li>
+      </ul>
+      <p>Nebula is not intended to facilitate unauthorized access, piracy, or the circumvention of copyright protection mechanisms.</p>
+      <h3>4. Software Updates and Maintenance</h3>
+      <p>Nebula is an actively developed project, with updates released periodically to address bugs, improve functionality, and introduce new features.</p>
+      <p>Users are responsible for manually downloading, installing, and maintaining the latest available version of Nebula through official distribution channels.</p>
+      <p>The development team does not guarantee uninterrupted functionality, backward compatibility, continued development, or compatibility with future game updates.</p>
+      <h3>5. Limitation of Liability</h3>
+      <p>Nebula is provided <strong>"AS IS" and "AS AVAILABLE,"</strong> without warranties of any kind, whether express or implied.</p>
+      <p>To the maximum extent permitted by applicable law, Nebula's developers, contributors, and maintainers shall not be held liable for damages, data loss, corrupted files, account restrictions, suspensions, bans, system failures, or other consequences arising from the use, misuse, or inability to use the software.</p>
+      <h3>6. Acceptance of Disclaimer</h3>
+      <p>By using Nebula, you acknowledge that you have read and understood this disclaimer and accept responsibility for your use of the software.</p>
+      <p>If you do not agree with this disclaimer, you should discontinue use of Nebula and remove the software from your system.</p>
+      <hr>
+      <p><strong>Nebula — Independently Developed. Community Driven.</strong></p>
+      <p>Nebula is an unofficial third-party project and is not an official Rockstar Games or Take-Two Interactive product.</p>
+    </div>
+    <div class="legal-actions">
+      <p id="legal-status" role="status" hidden></p>
+      <button id="legal-exit" type="button" class="secondary">Exit</button>
+      <button id="legal-accept" type="button" class="primary">Accept and continue</button>
+    </div>
+  </dialog>
   <dialog id="remove-dialog" aria-labelledby="remove-title">
     <h2 id="remove-title">Remove from library?</h2><p id="remove-description"></p>
     <div class="actions"><button class="secondary" id="cancel-remove">Cancel</button><button class="primary" id="confirm-remove">Remove</button></div>

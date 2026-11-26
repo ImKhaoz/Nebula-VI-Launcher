@@ -1,6 +1,9 @@
 #requires -Version 7.0
 [CmdletBinding()]
-param([ValidatePattern('^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$')][string]$Version = '0.1.0-preview.2')
+param(
+    [Parameter(Mandatory)][ValidatePattern('^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$')][string]$Version,
+    [AllowEmptyString()][ValidatePattern('^$|^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$')][string]$Repository = ''
+)
 
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $true
@@ -12,7 +15,8 @@ $app = Join-Path $release $name
 if (Test-Path -LiteralPath $release) { throw "Release directory already exists: $release" }
 
 $null = New-Item -ItemType Directory -Path $release
-dotnet publish (Join-Path $root 'Nebula-GTAVI.csproj') -c Release -r win-x64 --self-contained true "-p:Version=$Version" -o $app
+dotnet publish (Join-Path $root 'Nebula-GTAVI.csproj') -c Release -r win-x64 --self-contained true `
+    "-p:NebulaVersion=$Version" "-p:NebulaReleaseRepository=$Repository" -o $app
 
 $required = @("$edition.exe", 'Dashboard/index.html', 'Assets/NexusLogo.png')
 foreach ($path in $required) {
@@ -42,6 +46,16 @@ foreach ($folder in $app, $release) { Copy-Item -LiteralPath (Join-Path $root 'R
 $assets = Get-Content -Raw (Join-Path $root 'obj/project.assets.json') | ConvertFrom-Json
 $packages = @($assets.packageFolders.PSObject.Properties.Name)
 $config = Get-Content -Raw (Join-Path $app "$edition.runtimeconfig.json") | ConvertFrom-Json
+if (!$config.runtimeOptions.includedFrameworks -or
+    !($config.runtimeOptions.includedFrameworks.name -contains 'Microsoft.NETCore.App') -or
+    !($config.runtimeOptions.includedFrameworks.name -contains 'Microsoft.WindowsDesktop.App')) {
+    throw 'The published app is framework-dependent. Refusing to package a release that requires users to install the .NET Desktop Runtime.'
+}
+foreach ($runtimeFile in 'hostfxr.dll','hostpolicy.dll','coreclr.dll','PresentationFramework.dll') {
+    if (!(Test-Path -LiteralPath (Join-Path $app $runtimeFile) -PathType Leaf)) {
+        throw "The self-contained release is missing $runtimeFile."
+    }
+}
 $licenses = @{
     'microsoft.web.webview2/1.0.4370.26' = 'WebView2'
 }
@@ -62,3 +76,6 @@ $archive = Join-Path $release "$name.zip"
 $hash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
 "$hash  $name.zip" | Set-Content -LiteralPath (Join-Path $release 'SHA256SUMS.txt')
 Write-Host "Release prepared at $release"
+if ([string]::IsNullOrWhiteSpace($Repository)) {
+    Write-Host 'GitHub update checking is disabled until -Repository OWNER/REPOSITORY is set.'
+}

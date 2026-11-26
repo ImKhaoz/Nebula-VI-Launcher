@@ -44,9 +44,20 @@ class NebulaSettings {
     this.get('clear-leonida').addEventListener('click', () => send('clear-leonida'));
     this.get('victory-console-mode').addEventListener('change', () => this.saveVictoryGraphics());
     this.get('gta-runtime').addEventListener('change', () => this.saveGtaRuntime());
+    this.get('scarlett-resolution').addEventListener('change', () => this.send('save-gta-resolution', null, { resolution: this.get('scarlett-resolution').value }));
+    this.get('scarlett-ray-tracing').addEventListener('change', () => this.send('save-scarlett-ray-tracing', null, { enabled: this.get('scarlett-ray-tracing').checked }));
+    this.get('open-selected-runtime-folder').addEventListener('click', () => send('open-selected-runtime-folder'));
     this.get('victory-world-install').addEventListener('submit', event => {
       event.preventDefault();
       send('install-victory-world', null, { repository: this.get('victory-world-repository').value.trim() });
+    });
+    this.get('custom-runtime-form').addEventListener('submit', event => {
+      event.preventDefault();
+      this.get('custom-runtime-install').disabled = true;
+      send('install-custom-victory', null, {
+        repository: this.get('custom-runtime-repository').value.trim(),
+        branch: this.get('custom-runtime-branch').value.trim()
+      });
     });
     this.get('install-runtime-git').addEventListener('click', () => send('install-runtime-prerequisite', null, { tool: 'git' }));
     this.get('install-runtime-rust').addEventListener('click', () => send('install-runtime-prerequisite', null, { tool: 'rust' }));
@@ -77,6 +88,8 @@ class NebulaSettings {
         startupSound: this.get('pref-sound').checked,
         backgroundMotion: this.get('pref-motion').checked,
         videoPreview: this.get('pref-video-preview').checked,
+        prewarmShaders: this.get('pref-prewarm-shaders').checked,
+        developerMode: this.get('pref-developer-mode').checked,
         layout: this.get('pref-layout').value
       });
     });
@@ -150,7 +163,7 @@ class NebulaSettings {
   showPage(page) {
     if (page === 'leonida' && !this.state.gtaOnlyEdition && !this.game?.leonida) return;
     this.notice('');
-    const descriptions = { preferences: 'Launcher preferences', runtime: 'Compatibility settings', leonida: 'GTA VI setup', game: this.game?.title ?? 'Game settings' };
+    const descriptions = { preferences: 'Launcher preferences', runtime: 'Compatibility settings', leonida: 'VI Setup', game: this.game?.title ?? 'Game settings' };
     this.get('settings-subtitle').textContent = descriptions[page];
     for (const panel of this.sections) panel.hidden = panel.dataset.settingsPanel !== page;
     for (const tab of this.tabs) {
@@ -165,6 +178,11 @@ class NebulaSettings {
     this.get('victory-console-mode').value = state.victoryConsoleMode === 'series-s' ? 'series-s' : 'series-x';
     this.get('gta-runtime-world').disabled = !state.victoryWorldAvailable;
     this.get('gta-runtime-nvidia').disabled = !state.nvidiaVictoryAvailable;
+    this.get('open-selected-runtime-folder').disabled = !state.gtaRuntimeFolderAvailable;
+    this.get('scarlett-resolution-row').hidden = !state.scarlettFoxRuntime;
+    this.get('scarlett-resolution').value = state.gtaResolution || '1920x1080';
+    this.get('scarlett-ray-tracing-row').hidden = !state.scarlettFoxRuntime;
+    this.get('scarlett-ray-tracing').checked = Boolean(state.scarlettRayTracing);
     const selected = state.gtaRuntime || 'victory';
     this.get('gta-runtime').value = selected === 'victory' && !state.victoryWorldAvailable ? '' : selected;
     this.get('victory-world-install').hidden = state.gtaOnlyEdition || state.victoryWorldAvailable;
@@ -188,14 +206,29 @@ class NebulaSettings {
 
   showEditionBuilds(state) {
     const select = this.get('gta-runtime');
-    const installed = state.victoryBuilds.filter(build => build.installed);
-    for (const build of state.victoryBuilds) {
+    const staticBuilds = state.victoryBuilds || [];
+    const customBuilds = state.customVictoryBuilds || [];
+    const installed = [...staticBuilds, ...customBuilds].filter(build => build.installed);
+    for (const build of staticBuilds) {
       if (![...select.options].some(option => option.value === build.id))
         select.add(new Option(build.name, build.id));
     }
+    const customIds = new Set(customBuilds.map(build => build.id));
+    for (const option of [...select.options]) {
+      if (option.dataset.customRuntime && !customIds.has(option.value)) option.remove();
+    }
+    for (const build of customBuilds) {
+      let option = [...select.options].find(item => item.value === build.id);
+      if (!option) {
+        option = new Option(`${build.name} · Custom`, build.id);
+        option.dataset.customRuntime = 'true';
+        select.add(option);
+      } else option.textContent = `${build.name} · Custom`;
+    }
     for (const option of select.options) {
       if (!option.value) continue;
-      option.hidden = option.disabled = !installed.some(build => build.id === option.value);
+      const available = installed.some(build => build.id === option.value) || !state.gtaOnlyEdition && option.value === 'xcl' && state.xclAvailable;
+      option.hidden = option.disabled = !available;
     }
     const selection = installed.find(build => build.id === state.gtaRuntime) || installed[0];
     select.value = selection?.id || '';
@@ -208,20 +241,50 @@ class NebulaSettings {
     const rust = this.get('install-runtime-rust');
     rust.disabled = Boolean(state.victoryWorldInstalling || state.rustAvailable);
     rust.textContent = state.rustAvailable ? 'Rust installed' : 'Install Rust';
+    const customForm = this.get('custom-runtime-form');
+    customForm.querySelectorAll('input').forEach(input => input.disabled = Boolean(state.victoryWorldInstalling));
+    const customInstall = this.get('custom-runtime-install');
+    customInstall.disabled = Boolean(state.victoryWorldInstalling);
+    customInstall.textContent = state.victoryWorldInstalling && state.victoryInstallBuildId?.startsWith('custom-')
+      ? 'Building custom runtime…' : 'Build and install';
     const actions = this.get('victory-build-actions');
-    if (!actions.childElementCount) {
-      for (const build of state.victoryBuilds) {
-        const button = document.createElement('button');
-        button.type = 'button';
-        button.className = 'secondary';
-        button.addEventListener('click', () => this.send('install-victory-build', null, { runtime: build.id }));
-        actions.append(button);
+    const buildSet = staticBuilds.map(build => build.id).join('|');
+    if (actions.dataset.buildSet !== buildSet) {
+      actions.dataset.buildSet = buildSet;
+      actions.replaceChildren();
+      for (const build of staticBuilds) {
+        const row = document.createElement('div');
+        row.className = 'runtime-install-row';
+        const title = document.createElement('div');
+        title.className = 'runtime-install-title';
+        title.innerHTML = `<strong></strong><small></small>`;
+        title.querySelector('strong').textContent = build.name;
+        title.querySelector('small').textContent = build.repository || 'Community runtime';
+        const buttons = document.createElement('div');
+        buttons.className = 'runtime-install-buttons';
+        const install = document.createElement('button');
+        install.type = 'button';
+        install.className = 'secondary';
+        install.textContent = 'Install';
+        install.addEventListener('click', () => this.send('install-victory-build', null, { runtime: build.id }));
+        const update = document.createElement('button');
+        update.type = 'button';
+        update.className = 'secondary';
+        update.textContent = 'Install Latest';
+        update.addEventListener('click', () => this.send('install-latest-victory-build', null, { runtime: build.id }));
+        buttons.append(install, update);
+        row.append(title, buttons);
+        actions.append(row);
       }
     }
-    state.victoryBuilds.forEach((build, index) => {
-      const button = actions.children[index];
-      button.disabled = Boolean(state.victoryWorldInstalling || build.installed);
-      button.textContent = build.installed ? `${build.name} installed` : `Install ${build.name}`;
+    staticBuilds.forEach((build, index) => {
+      const row = actions.children[index];
+      const [install, update] = row.querySelectorAll('button');
+      const building = state.victoryWorldInstalling && state.victoryInstallBuildId === build.id;
+      install.disabled = Boolean(state.victoryWorldInstalling || build.installed);
+      install.textContent = build.installed ? 'Installed' : 'Install';
+      update.disabled = Boolean(state.victoryWorldInstalling);
+      update.textContent = building && state.victoryInstallLatest ? 'Building latest…' : 'Install Latest';
     });
   }
 
@@ -236,6 +299,12 @@ class NebulaSettings {
   }
 
   receiveXclShaderBuild(status) {
+    status = {
+      status: status.Status ?? status.status ?? 'idle',
+      progress: status.Progress ?? status.progress ?? 0,
+      total: status.Total ?? status.total ?? 0,
+      message: status.Message ?? status.message ?? ''
+    };
     const running = status.status === 'running';
     this.get('xcl-tools').hidden = this.state.gtaRuntime !== 'xcl' && !running;
     this.get('build-xcl-shaders').disabled = running || !this.state.xclAvailable || !this.state.leonida?.exists;
@@ -283,6 +352,8 @@ class NebulaSettings {
     this.get('pref-sound').checked = this.state.startupSound !== false;
     this.get('pref-motion').checked = this.state.backgroundMotion !== false;
     this.get('pref-video-preview').checked = this.state.videoPreview !== false;
+    this.get('pref-prewarm-shaders').checked = this.state.prewarmShaders !== false;
+    this.get('pref-developer-mode').checked = this.state.developerMode === true;
     this.get('pref-layout').value = this.state.defaultLayout === 'carousel' ? 'carousel' : 'grid';
   }
 

@@ -6,6 +6,8 @@ const rail = byId('rail');
 const search = byId('search');
 const sort = byId('sort');
 const dialog = byId('remove-dialog');
+const legalDialog = byId('legal-disclaimer');
+const runtimeSecurityDialog = byId('runtime-security-dialog');
 const primary = byId('feature-action');
 const secondary = byId('feature-secondary');
 const activityToggle = byId('activity-toggle');
@@ -33,6 +35,29 @@ let games = [];
 let diagnosticsAvailable = false;
 let gtaOnlyEdition = false;
 let selectedVictoryInstalled = false;
+let developerMode = false;
+let lastDeveloperSnapshot = '';
+let lastPrewarmLogAt = 0;
+let lastPrewarmLogBucket = -1;
+let lastXclProgressBucket = -1;
+let lastFrameTelemetry = '';
+let lastPresentSample = null;
+
+function logPresentRate(report) {
+  const presents = Number(report?.presents);
+  const now = Date.now();
+  if (!Number.isFinite(presents)) return;
+  if (lastPresentSample && presents >= lastPresentSample.presents) {
+    const elapsed = now - lastPresentSample.at;
+    const delta = presents - lastPresentSample.presents;
+    if (elapsed >= 900 && delta > 0) {
+      const fps = delta * 1000 / elapsed;
+      developerLog(`Measured present rate: ${fps.toFixed(1)} FPS · ${delta.toLocaleString()} new presents`);
+    }
+  }
+  lastPresentSample = { presents, at: now };
+}
+const developerLogLines = [];
 const gameIcons = new Map();
 const gameCatalog = new Map();
 const pendingCatalog = new Set();
@@ -106,6 +131,7 @@ rail.addEventListener('focusin', event => {
 const launchSplash = byId('prelaunch');
 const launchProgress = byId('prelaunch-progress');
 const launchButton = byId('prelaunch-cancel');
+const launchSkipButton = byId('prelaunch-skip');
 let launchPhase = 'closed';
 function dismissLaunchSplash() {
   if (launchPhase !== 'shaders' || launchButton.disabled) return;
@@ -114,6 +140,13 @@ function dismissLaunchSplash() {
   send('cancel-launch-shaders');
 }
 launchButton.addEventListener('click', dismissLaunchSplash);
+launchSkipButton.addEventListener('click', () => {
+  if (launchPhase !== 'shaders' || launchSkipButton.disabled) return;
+  launchSkipButton.disabled = true;
+  launchSkipButton.textContent = 'Skipping…';
+  byId('prelaunch-status').textContent = 'Stopping shader pre-warming. The game will launch and compile shaders as needed.';
+  send('skip-launch-prewarm');
+});
 launchSplash.addEventListener('cancel', event => {
   event.preventDefault();
   dismissLaunchSplash();
@@ -147,6 +180,9 @@ function updateLaunchSplash({ phase, message, title, elapsed, runtimeLabel }) {
   launchButton.textContent = 'Cancel launch';
   launchButton.hidden = !building;
   launchButton.disabled = false;
+  launchSkipButton.hidden = !building;
+  launchSkipButton.disabled = false;
+  launchSkipButton.textContent = 'Skip pre-warming';
   if (!launchSplash.open) launchSplash.showModal();
 }
 let activityExpanded = false;
@@ -183,6 +219,48 @@ function showToast(message) {
   clearTimeout(toastTimer);
   toastTimer = setTimeout(hideToast, Math.min(11000, Math.max(4200, message.length * 48)));
 }
+
+function developerLog(message) {
+  if (!developerMode) return;
+  const stamp = new Date().toLocaleTimeString();
+  const line = `[${stamp}] ${message}`;
+  developerLogLines.push(line);
+  while (developerLogLines.length > 800) developerLogLines.shift();
+  const output = byId('prelaunch-console-output');
+  output.append(document.createTextNode(`${line}\n`));
+  while (output.childNodes.length > 320) output.firstChild.remove();
+  output.scrollTop = output.scrollHeight;
+}
+
+document.querySelectorAll('.developer-console-clear').forEach(button => button.addEventListener('click', () => {
+  developerLogLines.length = 0;
+  byId('prelaunch-console-output').replaceChildren();
+}));
+const launchDeveloperConsole = byId('prelaunch-developer-console');
+const consoleMinimizeButton = launchDeveloperConsole.querySelector('.developer-console-minimize');
+const consoleExpandButton = launchDeveloperConsole.querySelector('.developer-console-expand');
+consoleMinimizeButton.addEventListener('click', () => {
+  const minimized = launchDeveloperConsole.classList.toggle('is-minimized');
+  consoleMinimizeButton.textContent = minimized ? 'Restore' : 'Minimize';
+  consoleMinimizeButton.title = minimized ? 'Restore console' : 'Minimize console';
+  consoleMinimizeButton.setAttribute('aria-expanded', String(!minimized));
+});
+consoleExpandButton.addEventListener('click', () => {
+  const expanded = launchDeveloperConsole.classList.toggle('is-expanded');
+  consoleExpandButton.textContent = expanded ? 'Restore size' : 'Expand';
+  consoleExpandButton.title = expanded ? 'Restore console size' : 'Expand console';
+  consoleExpandButton.setAttribute('aria-pressed', String(expanded));
+  if (expanded && launchDeveloperConsole.classList.contains('is-minimized')) {
+    launchDeveloperConsole.classList.remove('is-minimized');
+    consoleMinimizeButton.textContent = 'Minimize';
+    consoleMinimizeButton.title = 'Minimize console';
+    consoleMinimizeButton.setAttribute('aria-expanded', 'true');
+  }
+});
+document.querySelectorAll('.developer-console-save').forEach(button => button.addEventListener('click', () => {
+  if (!developerLogLines.length) { showToast('The developer console is empty.'); return; }
+  send('save-developer-log', null, { content: `${developerLogLines.join('\n')}\n` });
+}));
 
 function setSearch(open) {
   search.hidden = !open;
@@ -786,7 +864,62 @@ byId('leonida-prompt-select').addEventListener('click', () => {
   if (game) send('play', game.id);
 });
 
+legalDialog.addEventListener('cancel', event => event.preventDefault());
+byId('legal-accept').addEventListener('click', () => send('accept-legal-disclaimer'));
+byId('legal-exit').addEventListener('click', () => send('decline-legal-disclaimer'));
+byId('launcher-update-open').addEventListener('click', () => send('open-launcher-update'));
+byId('runtime-security-cancel').addEventListener('click', () => send('runtime-security-cancel'));
+byId('runtime-security-continue').addEventListener('click', () => send('runtime-security-continue'));
+runtimeSecurityDialog.addEventListener('cancel', event => event.preventDefault());
+
+function showRuntimeSecurityReview(data) {
+  byId('runtime-security-name').textContent = data.runtimeName || 'Downloaded runtime';
+  byId('runtime-security-summary').textContent = data.summary || 'Review the scan result before continuing.';
+  byId('runtime-security-continue').textContent = data.continueLabel || 'Continue anyway';
+  const container = byId('runtime-security-findings');
+  container.replaceChildren();
+  const findings = Array.isArray(data.findings) ? data.findings : [];
+  if (findings.length) {
+    const heading = document.createElement('h3');
+    heading.textContent = 'Detected items';
+    container.append(heading);
+    for (const finding of findings) {
+      const item = document.createElement('article');
+      item.className = 'runtime-security-finding';
+      const name = document.createElement('strong');
+      name.textContent = finding.threatName || 'Detected item';
+      const id = document.createElement('small');
+      id.textContent = `Defender threat ID ${finding.threatId || 'unknown'}`;
+      item.append(name, id);
+      if (finding.actionSucceeded) {
+        const action = document.createElement('small');
+        action.textContent = 'Microsoft Defender reports that an action was taken.';
+        item.append(action);
+      }
+      for (const file of (Array.isArray(finding.files) ? finding.files : [])) {
+        const path = document.createElement('code');
+        path.textContent = file;
+        item.append(path);
+      }
+      container.append(item);
+    }
+  } else {
+    const status = document.createElement('p');
+    status.textContent = data.scanCompleted
+      ? 'No threat records were reported, but the scan could not be confirmed clean.'
+      : 'No verified scan results are available.';
+    container.append(status);
+  }
+  if (!runtimeSecurityDialog.open) runtimeSecurityDialog.showModal();
+  byId('runtime-security-cancel').focus();
+}
+
 host?.addEventListener('message', ({ data }) => {
+  if (data.type === 'runtime-security-review') { showRuntimeSecurityReview(data); return; }
+  if (data.type === 'runtime-security-review-close') {
+    if (runtimeSecurityDialog.open) runtimeSecurityDialog.close();
+    return;
+  }
   if (data.type === 'initial-library-ready') {
     const artwork = [...rail.querySelectorAll('img:not([hidden])'), byId('game-backdrop')]
       .filter(image => image.hasAttribute('src'));
@@ -808,23 +941,50 @@ host?.addEventListener('message', ({ data }) => {
     return;
   }
   if (data.type === 'gta-launch-splash') {
+    developerLog(`Launch: ${data.phase}${data.message ? ` · ${data.message}` : ''}`);
     updateLaunchSplash(data);
     return;
   }
+  if (data.type === 'developer-log') {
+    developerLog(`${data.source}: ${data.message}`);
+    return;
+  }
   if (data.type === 'victory-prewarm-progress') {
-    if (launchSplash.open && launchPhase === 'shaders' && !launchButton.disabled) {
-      const { done, total } = data;
-      launchProgress.value = (done / total) * 100;
-      byId('prelaunch-metric').textContent = `${done.toLocaleString()} / ${total.toLocaleString()} shader records`;
-      byId('prelaunch-status').textContent = done === total
-        ? 'Finishing the shader cache…'
-        : 'Preparing the shader cache. The game opens when this finishes.';
+    const now = Date.now();
+    const bucket = data.total > 0 ? Math.floor(data.done * 10 / data.total) : -1;
+    if (bucket !== lastPrewarmLogBucket || now - lastPrewarmLogAt >= 1500) {
+      lastPrewarmLogAt = now;
+      lastPrewarmLogBucket = bucket;
+      developerLog(`Shader prewarm: ${data.total > 0 ? `${data.done.toLocaleString()} / ${data.total.toLocaleString()} · ` : ''}${data.detail || 'Working…'}`);
+    }
+    if (launchSplash.open && launchPhase === 'shaders' && !launchButton.disabled && !launchSkipButton.disabled) {
+      const { done, total, detail } = data;
+      if (total > 0) {
+        launchProgress.value = (done / total) * 100;
+        byId('prelaunch-metric').textContent = `${done.toLocaleString()} / ${total.toLocaleString()} shader or pipeline records`;
+        byId('prelaunch-status').textContent = detail || (done === total
+          ? 'Finishing the shader cache…'
+          : 'Preparing the shader cache. The game opens when this finishes.');
+      } else {
+        launchProgress.removeAttribute('value');
+        byId('prelaunch-metric').textContent = detail || `${done.toLocaleString()} shader records translated`;
+        byId('prelaunch-status').textContent = detail || 'Scanning the game’s shader archive…';
+      }
     }
     return;
   }
   if (data.type === 'xcl-shader-build') {
     settings.receiveXclShaderBuild(data.status);
-    if (launchSplash.open && launchPhase === 'shaders' && !launchButton.disabled) {
+    const status = data.status.Status ?? data.status.status ?? 'idle';
+    const progress = data.status.Progress ?? data.status.progress ?? 0;
+    const total = data.status.Total ?? data.status.total ?? 0;
+    const message = data.status.Message ?? data.status.message ?? '';
+    const bucket = total > 0 ? Math.floor(progress * 10 / total) : -1;
+    if (bucket !== lastXclProgressBucket || ['complete', 'error', 'cancelled'].includes(status)) {
+      lastXclProgressBucket = bucket;
+      developerLog(`XCL shader build: ${status} · ${progress} / ${total}${message ? ` · ${message}` : ''}`);
+    }
+    if (launchSplash.open && launchPhase === 'shaders' && !launchButton.disabled && !launchSkipButton.disabled) {
       const { Total, Progress } = data.status;
       if (Total > 0) {
         launchProgress.value = Math.min(100, Progress * 100 / Total);
@@ -835,7 +995,24 @@ host?.addEventListener('message', ({ data }) => {
     }
     return;
   }
-  if (data.type === 'toast') { showToast(data.message); return; }
+  if (data.type === 'toast') { developerLog(`Launcher: ${data.message}`); showToast(data.message); return; }
+  if (data.type === 'developer-telemetry') {
+    const report = data.xclStatus;
+    if (!report?.available) return;
+    logPresentRate(report);
+    const frameSnapshot = `${report.presents}|${report.translatedPipelines}|${report.cacheHits}|${report.cacheMisses}|${report.sampledFrame}|${report.updated}`;
+    if (frameSnapshot !== lastFrameTelemetry) {
+      lastFrameTelemetry = frameSnapshot;
+      developerLog(`Frame/runtime telemetry: ${report.presents} presents · ${report.translatedPipelines} translated pipelines · DXIL ${report.cacheHits} hits / ${report.cacheMisses} misses${report.sampledFrame ? ` · sampled frame ${report.sampledFrame} (${report.nonDarkSamples ?? 0} visible samples)` : ''}`);
+    }
+    return;
+  }
+  if (data.type === 'launcher-update') {
+    byId('launcher-update-title').textContent = `Nebula ${data.latestVersion} is available`;
+    byId('launcher-update-details').textContent = `You’re using ${data.currentVersion}. Download the latest launcher release from GitHub.`;
+    byId('launcher-update').hidden = false;
+    return;
+  }
   if (data.type === 'game-properties') { settings.showGameProperties(data); return; }
   if (data.type === 'game-properties-saved') { settings.notice('Game settings saved.'); return; }
   if (data.type === 'preferences-saved') { settings.notice('Launcher preferences saved.'); return; }
@@ -900,11 +1077,44 @@ host?.addEventListener('message', ({ data }) => {
     return;
   }
   if (data.type !== 'state') return;
+  developerMode = data.developerMode === true;
+  byId('prelaunch-developer-console').hidden = !developerMode;
+  if (!developerMode) lastDeveloperSnapshot = '';
+  else {
+    const snapshot = `${data.gtaRuntime}|${data.victoryWorldInstalling}|${data.victoryWorldInstallStatus}|${data.xclStatus?.updated}|${data.xclStatus?.presents}|${data.xclStatus?.translatedPipelines}|${data.xclShaderBuild?.Status ?? data.xclShaderBuild?.status}|${data.xclShaderBuild?.Progress ?? data.xclShaderBuild?.progress}|${data.xclShaderBuild?.Total ?? data.xclShaderBuild?.total}`;
+    if (snapshot !== lastDeveloperSnapshot) {
+      lastDeveloperSnapshot = snapshot;
+      developerLog(`Runtime: ${data.gtaRuntime || 'not selected'}${data.gtaRuntimeFolderAvailable ? ' · installed' : ' · not installed'}`);
+      if (data.victoryWorldInstalling) developerLog(`Runtime install: ${data.victoryWorldInstallStatus || 'building'}`);
+      const shaderBuild = data.xclShaderBuild ?? {};
+      const shaderState = shaderBuild.Status ?? shaderBuild.status;
+      const shaderProgress = shaderBuild.Progress ?? shaderBuild.progress ?? 0;
+      const shaderTotal = shaderBuild.Total ?? shaderBuild.total ?? 0;
+      if (shaderState && shaderState !== 'idle') developerLog(`Shader cache: ${shaderState} · ${shaderProgress} / ${shaderTotal}`);
+      const report = data.xclStatus;
+      if (report?.available) {
+        lastFrameTelemetry = `${report.presents}|${report.translatedPipelines}|${report.cacheHits}|${report.cacheMisses}|${report.sampledFrame}|${report.updated}`;
+        logPresentRate(report);
+        developerLog(`Frame/runtime telemetry: ${report.presents} presents · ${report.translatedPipelines} translated pipelines · DXIL ${report.cacheHits} hits / ${report.cacheMisses} misses${report.sampledFrame ? ` · sampled frame ${report.sampledFrame} (${report.nonDarkSamples ?? 0} visible samples)` : ''}`);
+      }
+    }
+  }
+  if (legalDialog && data.gtaOnlyEdition && !data.legalDisclaimerAccepted && !legalDialog.open) {
+    legalDialog.showModal();
+    requestAnimationFrame(() => legalDialog.querySelector('.legal-copy').focus());
+  } else if (legalDialog?.open && data.legalDisclaimerAccepted) {
+    legalDialog.close();
+  }
   gtaOnlyEdition = Boolean(data.gtaOnlyEdition);
   document.body.classList.toggle('gta-edition', gtaOnlyEdition);
-  document.querySelector('.gta-edition-label').hidden = !gtaOnlyEdition;
+  const editionLabel = document.querySelector('.gta-edition-label');
+  editionLabel.hidden = !gtaOnlyEdition;
+  editionLabel.textContent = `VI Edition - ${data.launcherVersion || '0.1.0-preview.17'}`;
   if (gtaOnlyEdition) document.title = 'Nebula GTA VI Edition';
-  selectedVictoryInstalled = Boolean(data.victoryBuilds?.some(build => build.installed && build.id === data.gtaRuntime));
+  selectedVictoryInstalled = Boolean(
+    data.victoryBuilds?.some(build => build.installed && build.id === data.gtaRuntime) ||
+    data.customVictoryBuilds?.some(build => build.installed && build.id === data.gtaRuntime)
+  );
   diagnosticsAvailable = Boolean(data.diagnosticsAvailable);
   settings.updateState(data);
   document.body.classList.toggle('static-background', data.backgroundMotion === false);

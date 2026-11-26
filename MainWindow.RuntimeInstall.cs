@@ -1,26 +1,29 @@
 using System.Diagnostics;
 using System.IO;
+using System.Text.Json;
 
 namespace XboxEmulatorUI;
 
 public partial class MainWindow
 {
-    private sealed record VictoryBuild(string Name, string Directory, string Repository, string Revision, string Patch, string? PatchInclude = null);
+    private sealed record VictoryBuild(string Name, string Directory, string Repository, string Revision, string Patch, string Branch, string? PatchInclude = null);
     private const string TrustNvidiaRuntime = "victory-trustno1-nvidia";
 
     private static readonly IReadOnlyDictionary<string, VictoryBuild> VictoryBuilds = new Dictionary<string, VictoryBuild>
     {
         ["victory"] = new("VIctory World", "victory-world-runtime", "https://github.com/ZSlayerHQ/zslayer-pc-port-runtime.git",
-            "99f8834aa16b98d7f3943b8de262a8d4857bda7b", "VictoryWorld.Nebula.patch"),
-        ["victory-nvidia"] = new("Nvidia 8g", "victory-nvidia-8gb", "https://github.com/soldsawn/victory-nvidia-8gb.git",
-            "a14d8c88c12dfb00e0c0361b99d3d44addc620de", "VictoryNvidia.Nebula.patch"),
+            "99f8834aa16b98d7f3943b8de262a8d4857bda7b", "VictoryWorld.Nebula.patch", "next"),
+        ["victory-nvidia"] = new("Nvidia 8g", "victory-nvidia-8gb", "https://github.com/ad3lre/victory-nvidia-8gb.git",
+            "03ebc87da39d6fd843ddc74139c755661fcc7ebf", "VictoryNvidia.Nebula.patch", "main"),
         [TrustNvidiaRuntime] = new("VIctory NVIDIA", "victory-trustno1-nvidia", "https://github.com/trustno1-coder/VIctory-NVIDIA.git",
-            "3e5fb36392796602fce70aa7331f4100be9291af", "VictoryTrustNvidia.Nebula.patch"),
+            "3e5fb36392796602fce70aa7331f4100be9291af", "VictoryTrustNvidia.Nebula.patch", "main"),
         ["victory-amd"] = new("VIctory AMD", "victory-amd", "https://github.com/myokex/victory-amd.git",
-            "070df424b0967dca422478a1f12afaaf6736ebdd", "VictoryWorld.Nebula.patch", "--include=apps/victory/src/translate.rs")
+            "070df424b0967dca422478a1f12afaaf6736ebdd", "VictoryWorld.Nebula.patch", "victory-amd", "--include=apps/victory/src/translate.rs")
     };
     private bool _victoryWorldInstalling;
     private string? _victoryWorldInstallStatus;
+    private string? _victoryInstallBuildId;
+    private bool _victoryInstallLatest;
 
     private static string? FindGitExecutable() => FindRuntimeTool("git.exe",
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Git", "cmd"),
@@ -124,10 +127,10 @@ public partial class MainWindow
         return InstallVictoryBuildAsync("victory");
     }
 
-    private async Task InstallVictoryBuildAsync(string id)
+    private async Task InstallVictoryBuildAsync(string id, bool latest = false)
     {
         if (_victoryWorldInstalling || !VictoryBuilds.TryGetValue(id, out var build)) return;
-        if (FindVictoryRuntime(id) is not null) return;
+        if (!latest && FindVictoryRuntime(id) is not null) return;
         var git = FindGitExecutable();
         var cargo = FindCargoExecutable();
         if (git is null || cargo is null) throw new IOException("Install Git and Rust before building VIctory.");
@@ -139,14 +142,23 @@ public partial class MainWindow
         void CancelOnClose(object? sender, EventArgs args) => cancellation.Cancel();
         Closed += CancelOnClose;
         _victoryWorldInstalling = true;
+        _victoryInstallBuildId = id;
+        _victoryInstallLatest = latest;
         try
         {
-            _victoryWorldInstallStatus = $"Downloading {build.Name}…";
+            _victoryWorldInstallStatus = latest ? $"Checking GitHub for the latest {build.Name} source…" : $"Downloading {build.Name}…";
             PublishDashboardState();
             await RunRuntimeBuildStepAsync(git, staging, cancellation.Token, "init", "--quiet");
-            await RunRuntimeBuildStepAsync(git, staging, cancellation.Token,
-                "fetch", "--depth=1", "--no-tags", build.Repository, build.Revision);
+            await RunRuntimeBuildStepAsync(git, staging, cancellation.Token, latest
+                ? ["fetch", "--depth=1", "--no-tags", build.Repository, build.Branch]
+                : ["fetch", "--depth=1", "--no-tags", build.Repository, build.Revision]);
             await RunRuntimeBuildStepAsync(git, staging, cancellation.Token, "checkout", "--detach", "FETCH_HEAD");
+            var installedRevision = (await RunRuntimeBuildStepAsync(git, staging, cancellation.Token, "rev-parse", "HEAD")).Trim();
+
+            _victoryWorldInstallStatus = $"Runtime source downloaded. Scanning {build.Name} before patching or building…";
+            PublishDashboardState();
+            if (!await ScanRuntimeBeforeBuildAsync(staging, build.Name, cancellation.Token))
+                throw new OperationCanceledException("Runtime build cancelled during security review.");
 
             var patch = Path.Combine(staging, "nebula.patch");
             await using (var source = typeof(MainWindow).Assembly.GetManifestResourceStream(build.Patch)
@@ -154,9 +166,33 @@ public partial class MainWindow
             await using (var output = File.Create(patch))
                 await source.CopyToAsync(output, cancellation.Token);
             var apply = build.PatchInclude is null ? new[] { "apply", "--", patch } : ["apply", build.PatchInclude, "--", patch];
-            await RunRuntimeBuildStepAsync(git, staging, cancellation.Token, apply);
+            var patchApplied = true;
+            string? patchNotice = null;
+            try
+            {
+                await RunRuntimeBuildStepAsync(git, staging, cancellation.Token, apply);
+            }
+            catch (IOException error) when (error.Message.Contains("apply failed", StringComparison.OrdinalIgnoreCase))
+            {
+                // New upstream revisions can move the code touched by Nebula's optional shader patch.
+                // Try Git's three-way merge, then keep the fetched upstream source usable if it conflicts.
+                await RunRuntimeBuildStepAsync(git, staging, cancellation.Token, "reset", "--hard", "FETCH_HEAD");
+                try
+                {
+                    var threeWay = build.PatchInclude is null
+                        ? new[] { "apply", "--3way", "--", patch }
+                        : ["apply", "--3way", build.PatchInclude, "--", patch];
+                    await RunRuntimeBuildStepAsync(git, staging, cancellation.Token, threeWay);
+                }
+                catch (IOException mergeError) when (mergeError.Message.Contains("apply failed", StringComparison.OrdinalIgnoreCase))
+                {
+                    await RunRuntimeBuildStepAsync(git, staging, cancellation.Token, "reset", "--hard", "FETCH_HEAD");
+                    patchApplied = false;
+                    patchNotice = " Upstream changed the code touched by Nebula's shader patch; this revision is being built without that optional patch.";
+                }
+            }
 
-            _victoryWorldInstallStatus = $"Building {build.Name} locally. This can take several minutes…";
+            _victoryWorldInstallStatus = $"Building {build.Name} locally. This can take several minutes…" + (patchNotice ?? "");
             PublishDashboardState();
             await RunRuntimeBuildStepAsync(cargo, staging, cancellation.Token,
                 "build", "--release", "--locked", "-p", "victory");
@@ -165,12 +201,23 @@ public partial class MainWindow
             File.Copy(Path.Combine(staging, "LICENSE"), Path.Combine(target, "LICENSE"), overwrite: true);
             File.Move(Path.Combine(staging, "target", "release", "victory.exe"),
                 Path.Combine(target, "victory.exe"), overwrite: true);
+            File.WriteAllText(Path.Combine(target, "nebula-runtime.json"), JsonSerializer.Serialize(new
+            {
+                runtime = id,
+                repository = build.Repository,
+                revision = installedRevision,
+                installedUtc = DateTimeOffset.UtcNow,
+                source = latest ? "latest" : "pinned",
+                nebulaPatchApplied = patchApplied
+            }, new JsonSerializerOptions { WriteIndented = true }));
             if (FindGtaRuntime(_gtaRuntime) is null)
             {
                 _gtaRuntime = id;
                 SaveSettings();
             }
-            _victoryWorldInstallStatus = $"{build.Name} is installed.";
+            _victoryWorldInstallStatus = latest
+                ? $"{build.Name} updated to {installedRevision[..Math.Min(7, installedRevision.Length)]}." + (patchNotice ?? "")
+                : $"{build.Name} is installed." + (patchNotice ?? "");
         }
         catch (Exception error)
         {
@@ -182,6 +229,8 @@ public partial class MainWindow
         {
             Closed -= CancelOnClose;
             _victoryWorldInstalling = false;
+            _victoryInstallBuildId = null;
+            _victoryInstallLatest = false;
             if (string.Equals(Path.GetDirectoryName(Path.GetFullPath(staging)), root, StringComparison.OrdinalIgnoreCase))
             {
                 try { Directory.Delete(staging, recursive: true); }
@@ -192,7 +241,7 @@ public partial class MainWindow
         }
     }
 
-    private static async Task RunRuntimeBuildStepAsync(string executable, string folder, CancellationToken cancellation, params string[] args)
+    private static async Task<string> RunRuntimeBuildStepAsync(string executable, string folder, CancellationToken cancellation, params string[] args)
     {
         cancellation.ThrowIfCancellationRequested();
         var start = new ProcessStartInfo(executable)
@@ -227,11 +276,13 @@ public partial class MainWindow
             await process.WaitForExitAsync(cancellation);
             await Task.WhenAll(stdout, stderr);
             cancellation.ThrowIfCancellationRequested();
+            var output = await stdout;
             if (process.ExitCode != 0)
             {
                 var detail = (await stderr).Replace(folder, "[build folder]", StringComparison.OrdinalIgnoreCase).Trim();
                 throw new IOException($"{Path.GetFileName(executable)} {args[0]} failed. {LimitReport(detail)}");
             }
+            return output;
         }
     }
 }
