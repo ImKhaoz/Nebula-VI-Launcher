@@ -1,0 +1,282 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data: https://*.steamstatic.com; connect-src https://*.steamstatic.com; media-src blob: https://*.steamstatic.com https://media-rockstargames-com.akamaized.net; base-uri 'none'; form-action 'none'">
+  <title>Nebula</title>
+  <link rel="stylesheet" href="dashboard.css">
+  <script defer src="vendor/hls.light.min.js"></script>
+  <script defer src="video-shelf.js"></script>
+  <script defer src="hover-preview.js"></script>
+  <script defer src="settings.js"></script>
+  <script defer src="dashboard.js"></script>
+</head>
+<body>
+  <svg class="symbol-library" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+    <symbol id="icon-windows" viewBox="0 0 24 24"><path fill="currentColor" stroke="none" d="M2 2h9v9H2zm11 0h9v9h-9zm-11 11h9v9H2zm11 0h9v9h-9z"/></symbol>
+    <symbol id="icon-local" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="M3 14h18m-13 2.5h.01m3.5 0h.01"/></symbol>
+    <symbol id="icon-diagnostics" viewBox="0 0 24 24"><rect x="2.5" y="4" width="19" height="16" rx="4"/><path d="M5.5 12h3l2-4 3.2 8 2.1-4h2.7"/></symbol>
+    <symbol id="icon-chevron" viewBox="0 0 24 24"><path d="m5 9 7 7 7-7"/></symbol>
+  </svg>
+  <div class="scene" aria-hidden="true"></div>
+  <img id="game-backdrop" class="game-backdrop" alt="" hidden>
+  <img id="hover-backdrop" class="hover-backdrop" alt="" aria-hidden="true">
+  <video id="hover-video" class="hover-backdrop hover-video" muted loop playsinline preload="none" aria-hidden="true"></video>
+  <div class="scene-shade" aria-hidden="true"></div>
+  <header id="chrome">
+    <div class="brand" role="img" aria-label="Nebula">
+      <img class="brand-mark" src="../Assets/NexusLogo.png" alt="">
+      <img class="brand-wordmark" src="../Assets/NebulaHeaderLettering.png" alt="">
+    </div>
+    <nav class="sections" aria-label="Library views">
+      <button data-view="games" aria-current="page">Games</button>
+      <button data-view="recent">Recent</button>
+    </nav>
+    <span class="gta-edition-label" hidden>GTA VI Edition</span>
+    <div class="utilities">
+      <button class="icon" id="search-toggle" title="Search games" aria-label="Search games" aria-expanded="false"><svg viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></svg></button>
+      <button class="icon" id="open-settings" title="Launcher settings" aria-label="Launcher settings"><svg viewBox="0 0 24 24"><path d="M12 3v3m0 12v3M3 12h3m12 0h3M5.6 5.6l2.1 2.1m8.6 8.6 2.1 2.1m0-12.8-2.1 2.1m-8.6 8.6-2.1 2.1"/><circle cx="12" cy="12" r="6"/></svg></button>
+      <button class="icon audio-toggle" id="sound-toggle" data-action="toggle-sound" title="Launcher sounds" aria-label="Launcher sounds" aria-pressed="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 9h4l5-4v14l-5-4H3z"/><path class="sound-wave" d="M16 8a6 6 0 0 1 0 8m3-11a10 10 0 0 1 0 14"/><path class="sound-muted" d="m16 10 5 5m0-5-5 5"/></svg></button>
+      <time id="clock"></time>
+    </div>
+    <div class="window-controls" aria-label="Window controls">
+      <button data-action="minimize" aria-label="Minimize">–</button>
+      <button data-action="maximize" id="maximize" aria-label="Maximize">□</button>
+      <button data-action="close" class="close" aria-label="Close launcher">×</button>
+    </div>
+  </header>
+  <main id="library-screen">
+    <section class="collection" aria-labelledby="rail-title">
+      <div class="collection-heading">
+        <h2 id="rail-title">Your library</h2><span id="game-count"></span>
+        <input id="search" type="search" placeholder="Find a game" aria-label="Find a game" hidden>
+        <select id="sort" aria-label="Sort games"><option value="added">Recently added</option><option value="name">Name A–Z</option></select>
+        <button id="grid-toggle" class="layout-toggle" aria-pressed="false" aria-label="Grid view" title="Switch to grid view">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1" y="1" width="5" height="5"/><rect x="10" y="1" width="5" height="5"/><rect x="1" y="10" width="5" height="5"/><rect x="10" y="10" width="5" height="5"/></svg><span>Grid view</span>
+        </button>
+      </div>
+      <div id="rail" class="rail" aria-label="Library items"></div>
+    </section>
+    <section class="feature" aria-labelledby="feature-title">
+      <div class="feature-heading">
+        <div id="feature-mark" class="feature-mark" hidden aria-hidden="true"><img id="feature-icon" alt="" hidden><span id="feature-monogram"></span></div>
+        <div><div class="feature-kicker" id="feature-platform"></div>
+        <h1 id="feature-title">Game library</h1></div>
+      </div>
+      <p id="feature-description">Add your Windows games and experimental Xbox titles, or check your system in Diagnostics.</p>
+      <div class="actions">
+        <button id="feature-action" class="primary">Add Windows game</button>
+        <button id="feature-secondary" class="secondary">Add Xbox title</button>
+      </div>
+    </section>
+    <section id="activity" class="activity" aria-labelledby="activity-title" hidden>
+      <button id="activity-toggle" class="activity-toggle" aria-expanded="false" aria-controls="activity-content">
+        <span id="activity-title">Game activity</span><span id="activity-game"></span>
+        <svg class="activity-chevron" aria-hidden="true" viewBox="0 0 24 24"><use href="#icon-chevron"/></svg>
+      </button>
+      <div id="activity-content" class="activity-content" inert>
+       <div class="activity-inner">
+      <p id="activity-empty" class="activity-empty" role="status" hidden></p>
+      <section class="gta-activity" id="gta-activity" aria-label="GTA VI news and tips" hidden>
+        <section class="gta-feed-panel" aria-labelledby="gta-news-heading">
+          <div class="gta-feed-heading"><h3 id="gta-news-heading">Latest news</h3><button type="button" class="text-link" id="gta-news-source">Rockstar Games ↗</button></div>
+          <p class="gta-feed-status" id="gta-news-status" role="status"></p>
+          <div class="gta-feed-list" id="gta-news-list"></div>
+        </section>
+        <section class="gta-feed-panel" aria-labelledby="gta-tips-heading">
+          <div class="gta-feed-heading"><h3 id="gta-tips-heading">Tips &amp; tricks</h3><button type="button" class="text-link" id="gta-tips-source">GamesRadar+ ↗</button></div>
+          <p class="gta-feed-status" id="gta-tips-status" role="status"></p>
+          <div class="gta-feed-list" id="gta-tips-list"></div>
+        </section>
+      </section>
+      <div class="activity-grid">
+        <section class="activity-column reviews" aria-label="Steam player reviews">
+          <div class="feed-heading"><h3>Player reviews</h3><button class="text-link" data-discovery="steam-reviews" id="steam-review">Steam ↗</button></div>
+          <div class="rating-line"><strong id="steam-rating"></strong><span id="steam-count"></span></div>
+          <div id="review-feed" class="feed-list"></div>
+        </section>
+        <section class="activity-column news" aria-label="Steam game updates">
+          <div class="feed-heading"><h3>Game updates</h3><button class="text-link" data-discovery="steam-news" id="steam-news">Steam ↗</button></div>
+          <div id="news-feed" class="feed-list"></div>
+        </section>
+      </div>
+      <div class="discovery-links" aria-label="External game activity">
+        <button class="text-link" id="gtavi-media" data-discovery="gtavi-media" hidden>Rockstar trailers and media ↗</button>
+        <button class="text-link" data-discovery="twitch">Twitch streams ↗</button>
+        <button class="text-link" data-discovery="youtube">YouTube gameplay ↗</button>
+        <button class="text-link" data-discovery="google-reviews">More reviews on Google ↗</button>
+      </div>
+      <section class="media-shelf" id="media-shelf" aria-labelledby="media-heading">
+        <header class="media-heading">
+          <div><h2 id="media-heading">Trailers &amp; gameplay</h2><p id="media-game"></p></div>
+          <button class="text-link" id="media-store" hidden>Steam store ↗</button>
+        </header>
+        <p id="media-status" class="media-status" role="status"></p>
+        <div class="media-layout" id="media-layout" hidden>
+          <div class="media-main">
+            <div class="media-screen">
+              <img id="media-poster" class="media-poster" alt="" hidden>
+              <video id="media-player" controls playsinline preload="none" hidden></video>
+              <button class="media-play" id="media-play" title="Play trailer" aria-label="Play trailer"><span aria-hidden="true">▶</span></button>
+            </div>
+            <strong id="media-title"></strong>
+          </div>
+          <div class="media-playlist" id="media-playlist" aria-label="Available videos"></div>
+        </div>
+      </section>
+       </div>
+      </div>
+    </section>
+  </main>
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+  <dialog id="prelaunch" class="launch-splash" aria-labelledby="prelaunch-title" aria-describedby="prelaunch-status">
+    <section class="launch-content">
+      <div class="launch-brand" role="img" aria-label="Nebula">
+        <img class="launch-logo" src="../Assets/NexusLogo.png" alt="">
+        <img class="launch-wordmark" src="../Assets/NebulaWordmark.png" alt="">
+      </div>
+      <h2 id="prelaunch-title">Grand Theft Auto VI</h2>
+      <div class="launch-progress-header"><strong id="prelaunch-stage" role="status">Prewarming shaders</strong><span id="prelaunch-metric"></span></div>
+      <progress id="prelaunch-progress" class="shader-progress" max="100" aria-labelledby="prelaunch-stage"></progress>
+      <p id="prelaunch-status" role="status"></p>
+      <button id="prelaunch-cancel" class="secondary" type="button">Cancel launch</button>
+    </section>
+  </dialog>
+  <section class="settings-screen" id="settings-screen" role="main" aria-labelledby="settings-title" hidden>
+    <div class="settings-shell">
+      <header class="settings-header">
+        <div><h2 id="settings-title">Settings</h2><p id="settings-subtitle">Launcher preferences</p></div>
+        <button type="button" class="secondary settings-back" id="settings-close">← Back to library</button>
+      </header>
+      <div class="settings-columns">
+        <nav class="settings-nav" aria-label="Settings categories">
+          <button type="button" data-settings-page="preferences" aria-current="page">Preferences</button>
+          <button type="button" data-settings-page="runtime" hidden>Compatibility settings</button>
+          <button type="button" data-settings-page="leonida" hidden>GTA VI setup</button>
+          <button type="button" data-settings-page="game" id="game-settings-nav" hidden>Game settings</button>
+        </nav>
+        <div class="settings-content">
+          <form id="preferences-form" data-settings-panel="preferences">
+            <h3>Startup</h3>
+            <label class="setting-row"><span><strong>Show startup sequence</strong><small>Applies the next time Nebula opens.</small></span><input class="switch" type="checkbox" id="pref-intro"></label>
+            <label class="setting-row"><span><strong>Launcher sounds</strong><small>Play the startup sound and feedback for launcher controls.</small></span><input class="switch" type="checkbox" id="pref-sound"></label>
+            <label class="setting-row"><span><strong>10-second recording delay</strong><small>Count down before the splash on each launch when the startup sequence is on.</small></span><input class="switch" type="checkbox" id="pref-recording-delay"></label>
+            <h3>Dashboard</h3>
+            <label class="setting-row"><span><strong>Animated background</strong><small>Follows your Windows reduced-motion preference.</small></span><input class="switch" type="checkbox" id="pref-motion"></label>
+            <label class="setting-row"><span><strong>Background video previews</strong><small>Play muted video for selected and hovered games when available.</small></span><input class="switch" type="checkbox" id="pref-video-preview"></label>
+            <label class="setting-row"><span><strong>Default library view</strong></span><select id="pref-layout"><option value="grid">Grid</option><option value="carousel">Carousel</option></select></label>
+            <div class="actions settings-actions"><button class="primary" type="submit">Save preferences</button></div>
+          </form>
+          <section data-settings-panel="runtime" hidden>
+            <h3>Optional compatibility files</h3>
+            <div class="setting-block"><strong id="runtime-setting-status"></strong><p id="runtime-setting-path"></p></div>
+            <div class="actions settings-actions">
+              <button type="button" class="secondary" id="browse-runtime">Choose files</button>
+              <button type="button" class="secondary" id="reset-runtime">Use bundled files</button>
+              <button type="button" class="secondary" id="open-diagnostics-settings">Diagnostics</button>
+            </div>
+          </section>
+          <section data-settings-panel="leonida" hidden>
+            <div class="setting-row">
+              <div><strong>Game folder</strong><small id="leonida-status" role="status">Choose your local GTA VI package folder.</small></div>
+              <div class="actions">
+                <button class="secondary" type="button" id="clear-leonida">Clear</button>
+                <button class="primary" type="button" id="browse-leonida">Choose folder</button>
+              </div>
+            </div>
+            <div class="setting-row">
+              <div><label for="gta-runtime" class="setting-label">Compatibility runtime</label><small>Experimental. Each runtime uses its own shader cache.</small></div>
+              <select id="gta-runtime">
+                <option value="" disabled>Select an installed runtime</option>
+                <option id="gta-runtime-world" value="victory">VIctory World</option>
+                <option id="gta-runtime-nvidia" value="victory-nvidia">Nvidia 8g</option>
+                <option id="gta-runtime-amd" value="victory-amd" hidden disabled>VIctory AMD</option>
+                <option id="gta-runtime-xcl" value="xcl">XCL</option>
+              </select>
+            </div>
+            <form id="victory-world-install" class="setting-block" hidden>
+              <label for="victory-world-repository" class="setting-label">VIctory World repository</label>
+              <small>Install locally with Git, Rust, and Visual Studio C++ Build Tools.</small>
+              <input type="url" id="victory-world-repository" placeholder="https://github.com/ZSlayerHQ/victory-world-runtime" maxlength="220" autocomplete="off" required>
+              <div class="actions settings-actions"><button type="submit" class="secondary" id="victory-world-install-button">Build and install</button></div>
+            </form>
+            <div class="setting-block" id="victory-builds" hidden>
+              <strong>VIctory builds</strong>
+              <small>Git, Rust, and Visual Studio C++ Build Tools are required to build VIctory.</small>
+              <div class="actions settings-actions" aria-label="Build prerequisites">
+                <button type="button" class="secondary" id="install-runtime-git">Install Git</button>
+                <button type="button" class="secondary" id="install-runtime-rust">Install Rust</button>
+              </div>
+              <div class="actions settings-actions" id="victory-build-actions"></div>
+            </div>
+            <p id="victory-world-install-status" role="status" hidden></p>
+            <details class="gta-advanced">
+              <summary>Advanced</summary>
+              <div class="setting-row" id="victory-profile-row">
+                <div><label for="victory-console-mode" class="setting-label">Console profile</label><small>Applies to the next VIctory launch.</small></div>
+                <select id="victory-console-mode">
+                  <option value="series-x">Series X · default</option>
+                  <option value="series-s">Series S · reduced profile</option>
+                </select>
+              </div>
+              <section id="xcl-tools" hidden>
+                <h3>XCL tools</h3>
+                <div class="setting-row"><div><strong>Diagnostic frame capture</strong><small>Samples one frame every 120 presents.</small></div><input class="switch" type="checkbox" id="xcl-frame-diagnostics" aria-label="Enable XCL diagnostic frame capture"></div>
+                <div class="setting-row"><div><strong>Warm shader cache after XCL exits</strong></div><input class="switch" type="checkbox" id="xcl-postrun-precompile" aria-label="Warm XCL shader cache after game exits"></div>
+                <div class="actions settings-actions">
+                  <button class="secondary" type="button" id="build-xcl-shaders">Prebuild shader cache</button>
+                  <button class="secondary" type="button" id="cancel-xcl-shaders" hidden>Cancel prebuild</button>
+                </div>
+                <progress id="xcl-shader-progress" class="shader-progress" max="100" value="0" hidden aria-label="XCL shader cache build progress"></progress>
+                <p id="xcl-shader-build-status" role="status" hidden></p>
+                <details class="gta-report">
+                  <summary>Last XCL run</summary>
+                  <pre class="leonida-report" id="xcl-run-status"></pre>
+                </details>
+              </section>
+              <div class="actions settings-actions">
+                <button class="text-link" type="button" id="victory-project">VIctory World source ↗</button>
+                <button class="text-link" type="button" id="victory-nvidia-project">Nvidia 8g source ↗</button>
+                <button class="text-link" type="button" id="xcl-project">XCL releases ↗</button>
+                <button class="text-link" type="button" id="open-local-runtime-folder">Open local XCL folder</button>
+              </div>
+            </details>
+          </section>
+          <form id="game-settings-form" data-settings-panel="game" hidden>
+            <div class="game-settings-identity" id="game-settings-identity">
+              <div class="game-settings-mark"><img id="settings-game-icon" alt="" hidden><span id="settings-game-initials"></span></div>
+              <div><h3 id="settings-game-title"></h3><p id="settings-game-platform"></p></div>
+            </div>
+            <h3>Library</h3>
+            <label class="setting-block"><strong>Display name</strong><small>Leave blank to use the matched store title or executable name.</small><input id="game-display-name" maxlength="100" autocomplete="off"></label>
+            <h3>Launch</h3>
+            <label class="setting-block"><strong>Launch options</strong><small id="game-arguments-help"></small><input id="game-launch-arguments" maxlength="1500" autocomplete="off"></label>
+            <div class="setting-block"><strong>Executable</strong><p id="game-path"></p></div>
+            <div class="actions settings-actions">
+              <button class="primary" type="submit">Save game settings</button>
+              <button type="button" class="secondary" id="open-game-folder">Open folder</button>
+            </div>
+            <div class="settings-remove"><small>Remove the entry and its settings. The game files stay on disk.</small><button type="button" class="text-link danger" id="remove-game-settings">Remove from library</button></div>
+          </form>
+          <p class="settings-notice" id="settings-notice" role="status" hidden></p>
+        </div>
+      </div>
+    </div>
+  </section>
+  <footer>
+    <div class="footer-credit">GTA6 Modding Community</div>
+    <div class="hints" id="library-hints"><kbd>←</kbd><kbd>→</kbd> <span>Browse</span><kbd id="activity-key">↓</kbd> <span id="activity-key-label">Activity</span><kbd>Enter</kbd> <span>Select</span></div>
+    <div class="hints" id="settings-hints" hidden><kbd>↑</kbd><kbd>↓</kbd> <span>Categories</span><kbd>Tab</kbd> <span>Controls</span><kbd>Esc</kbd> <span>Back</span></div>
+  </footer>
+  <dialog id="remove-dialog" aria-labelledby="remove-title">
+    <h2 id="remove-title">Remove from library?</h2><p id="remove-description"></p>
+    <div class="actions"><button class="secondary" id="cancel-remove">Cancel</button><button class="primary" id="confirm-remove">Remove</button></div>
+  </dialog>
+  <aside class="leonida-prompt" id="leonida-prompt" aria-labelledby="leonida-prompt-title" hidden>
+    <strong id="leonida-prompt-title" role="status">GTA VI executable detected</strong>
+    <p>Select the GTA VI executable to add it to your library.</p>
+    <div class="actions"><button class="secondary" type="button" id="leonida-prompt-later">Later</button><button class="primary" type="button" id="leonida-prompt-select">Select executable</button></div>
+  </aside>
+</body>
+</html>

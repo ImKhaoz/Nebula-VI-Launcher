@@ -1,0 +1,20 @@
+# Generated build and release output
+bin/
+obj/
+release/
+.vs/
+TestResults/
+*.user
+*.suo
+
+# Local runtime installs, title files and diagnostic output
+runtimes/
+target/
+*.rpf
+*.xex
+*.xvc
+game_scarlett_master.exe
+MicrosoftGame.Config
+library.json
+settings.json
+*.log

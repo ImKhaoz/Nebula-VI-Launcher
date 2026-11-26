@@ -1,0 +1,333 @@
+diff --git a/apps/victory/src/main.rs b/apps/victory/src/main.rs
+index ead9f7c..211fdd6 100644
+--- a/apps/victory/src/main.rs
++++ b/apps/victory/src/main.rs
+@@ -91,6 +91,9 @@ enum Command {
+         /// `VICTORY_VIEW_LIMIT` to what the run's log says of the host.
+         #[arg(long)]
+         warm: Option<PathBuf>,
++        /// Detect the local GPU's shader limits before warming its cache.
++        #[arg(long, requires = "warm")]
++        probe_host: bool,
+     },
+     /// Prepare, map and bind a title executable; with --execute, run it.
+     Run {
+@@ -160,6 +163,7 @@ fn main() -> Result<()> {
+             list,
+             jobs,
+             warm,
++            probe_host,
+         } => {
+             // `VICTORY_VIEW_LIMIT=<null slot>`: translate as on a host whose view heap is capped
+             if let Some(n) = std::env::var("VICTORY_VIEW_LIMIT").ok().and_then(|v| v.parse().ok()) {
+@@ -170,6 +174,9 @@ fn main() -> Result<()> {
+                 victory_shader::emit::set_host_max_wave(n);
+             }
+             if let Some(file) = warm {
++                if probe_host {
++                    anyhow::ensure!(victory_hle::modules::d3d12x::probe_shader_host(), "could not detect the host GPU's shader limits");
++                }
+                 return translate::warm(paths, &file, jobs);
+             }
+             translate::run(paths, validate, pipelines, list, jobs)
+diff --git a/apps/victory/src/translate.rs b/apps/victory/src/translate.rs
+index 8ff35ef..98511a3 100644
+--- a/apps/victory/src/translate.rs
++++ b/apps/victory/src/translate.rs
+@@ -194,14 +194,27 @@ pub fn warm(paths: Vec<PathBuf>, file: &Path, jobs: Option<usize>) -> Result<()>
+             };
+             let jobs = sources(&data);
+             let next = AtomicUsize::new(0);
++            println!("warm-progress 0 {}", jobs.len());
+             std::thread::scope(|s| {
+                 for _ in 0..threads.min(jobs.len()) {
+                     s.spawn(|| {
+-                        while let Some(job) = jobs.get(next.fetch_add(1, Ordering::Relaxed)) {
++                        loop {
++                            let index = next.fetch_add(1, Ordering::Relaxed);
++                            let Some(job) = jobs.get(index) else { break };
++                            if index != 0 && index.is_multiple_of(64) {
++                                println!("warm-progress {index} {}", jobs.len());
++                            }
+                             let Some(bytes) = job.bytes() else {
+                                 continue;
+                             };
+-                            let hash = blake3::hash(&bytes).to_hex()[..16].to_owned();
++                            let Some(length) = bytes.get(0x18..0x1c).and_then(|size| size.try_into().ok()) else {
++                                continue;
++                            };
++                            let Some(bytes) = bytes.get(..u32::from_le_bytes(length) as usize) else {
++                                continue;
++                            };
++                            // Match the container-sized shader sent by the title, without archive data after it.
++                            let hash = blake3::hash(bytes).to_hex()[..16].to_owned();
+                             if limit.is_some_and(|n| began.elapsed().as_secs() >= n) {
+                                 counts[3].fetch_add(1, Ordering::Relaxed);
+                                 break;
+@@ -213,7 +226,7 @@ pub fn warm(paths: Vec<PathBuf>, file: &Path, jobs: Option<usize>) -> Result<()>
+                             if n.is_multiple_of(1000) {
+                                 println!("warm-up      {n} shaders so far, {:.0} s", began.elapsed().as_secs_f64());
+                             }
+-                            let which = match victory_hle::modules::d3d12x::warm_shader(&bytes) {
++                            let which = match victory_hle::modules::d3d12x::warm_shader(bytes) {
+                                 Ok(true) => 0,
+                                 Ok(false) => 1,
+                                 Err(_) => 2,
+@@ -223,9 +236,13 @@ pub fn warm(paths: Vec<PathBuf>, file: &Path, jobs: Option<usize>) -> Result<()>
+                     });
+                 }
+             });
++            if counts[3].load(Ordering::Relaxed) == 0 {
++                println!("warm-progress {0} {0}", jobs.len());
++            }
+         }
+     }
+     let [translated, there, failed] = [0, 1, 2].map(|i| counts[i].load(Ordering::Relaxed));
++    println!("warm-result {}", translated + there);
+     let asked = if all { "all".to_owned() } else { wanted.len().to_string() };
+     let stopped = if counts[3].load(Ordering::Relaxed) > 0 { " (stopped at the time limit)" } else { "" };
+     println!(
+diff --git a/crates/victory-gpu/src/host.rs b/crates/victory-gpu/src/host.rs
+index 3c7b340..8f8d35a 100644
+--- a/crates/victory-gpu/src/host.rs
++++ b/crates/victory-gpu/src/host.rs
+@@ -8452,7 +8452,7 @@ fn make_window(width: u32, height: u32) -> windows::core::Result<HWND> {
+         CreateWindowExW(
+             WINDOW_EX_STYLE(0),
+             CLASS,
+-            w!("VIctory"),
++            w!("Nvidia 8g - GTA VI"),
+             WS_OVERLAPPEDWINDOW | WS_VISIBLE,
+             CW_USEDEFAULT,
+             CW_USEDEFAULT,
+diff --git a/crates/victory-gpu/src/lib.rs b/crates/victory-gpu/src/lib.rs
+index 5213cde..0397bb5 100644
+--- a/crates/victory-gpu/src/lib.rs
++++ b/crates/victory-gpu/src/lib.rs
+@@ -75,6 +75,11 @@ mod watch;
+ #[cfg(windows)]
+ pub use host::on_failure;
+ #[cfg(windows)]
++pub fn probe_shader_host() -> bool {
++    descriptor::host::probe_view_limit();
++    host::host().is_some()
++}
++#[cfg(windows)]
+ pub use census::title_memory_reserved;
+ #[cfg(windows)]
+ pub use inplace::{title_memory_freeing, title_memory_section, title_memory_view};
+diff --git a/crates/victory-gpu/src/pipeline/make.rs b/crates/victory-gpu/src/pipeline/make.rs
+index 79dd712..15b71fd 100644
+--- a/crates/victory-gpu/src/pipeline/make.rs
++++ b/crates/victory-gpu/src/pipeline/make.rs
+@@ -60,8 +60,12 @@ impl Pending {
+     }
+ 
+     fn make(&self) {
+-        self.made
+-            .get_or_init(|| HostPipeline::new(&self.shaders, self.graphics.as_deref()));
++        self.made.get_or_init(|| {
++            tracing::debug!(key = %self.key, shaders = ?self.shaders, "compiling host pipeline");
++            let pipeline = HostPipeline::new(&self.shaders, self.graphics.as_deref());
++            tracing::debug!(key = %self.key, ready = pipeline.is_some(), "host pipeline compile finished");
++            pipeline
++        });
+         let (lock, done) = &DONE;
+         let _held = lock.lock().unwrap_or_else(|e| e.into_inner());
+         done.notify_all();
+@@ -292,12 +296,18 @@ fn next() -> Arc<Pending> {
+     }
+ }
+ 
+-/// Starts the workers (half the logical processors, 2 to 8) on first use.
++/// Start the host compiler workers on first use. Override the default for
++/// machines with limited memory available to the graphics driver.
+ fn workers() -> bool {
+     static RUNNING: OnceLock<bool> = OnceLock::new();
+     *RUNNING.get_or_init(|| {
+         let mut running = false;
+-        let workers = std::thread::available_parallelism().map_or(2, |n| (n.get() / 2).clamp(2, 8));
++        let default = std::thread::available_parallelism().map_or(2, |n| (n.get() / 2).clamp(2, 8));
++        let workers = std::env::var("VICTORY_PIPELINE_WORKERS")
++            .ok()
++            .and_then(|value| value.trim().parse::<usize>().ok())
++            .map_or(default, |count| count.clamp(1, 8));
++        tracing::info!(workers, "host pipeline compiler workers");
+         for i in 0..workers {
+             let spawned = std::thread::Builder::new()
+                 .name(format!("victory-pipelines-{i}"))
+diff --git a/crates/victory-gpu/src/resource.rs b/crates/victory-gpu/src/resource.rs
+index 3a4dce2..8352e38 100644
+--- a/crates/victory-gpu/src/resource.rs
++++ b/crates/victory-gpu/src/resource.rs
+@@ -1300,7 +1300,8 @@ pub(crate) fn drop_levels(desc: &ResourceDesc) -> u32 {
+     let n = n.min(u32::from(desc.mip_levels).saturating_sub(1));
+     let (w, h) = (desc.width, u64::from(desc.height));
+     let whole = |side: u64| side % (4 << n) == 0;
+-    if n == 0 || w.min(h) < 512 || !whole(w) || !whole(h) {
++    // Loading artwork and video use display-sized textures and may only upload the largest mip.
++    if n == 0 || !w.is_power_of_two() || !h.is_power_of_two() || w.min(h) < 512 || !whole(w) || !whole(h) {
+         return 0;
+     }
+     n
+@@ -1513,8 +1514,14 @@ pub(crate) fn host_made<'a>(
+ #[cfg(windows)]
+ pub(crate) fn room() -> bool {
+     use std::sync::atomic::Ordering::Relaxed;
+-    const FLOOR: u64 = 2 << 30;
+     const WITHOUT_BUDGET: u64 = 4 << 30;
++    static FLOOR: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
++    let floor = *FLOOR.get_or_init(|| {
++        std::env::var("VICTORY_TEXTURE_FLOOR_MB")
++            .ok()
++            .and_then(|mb| mb.trim().parse::<u64>().ok())
++            .map_or(2 << 30, |mb| mb.min(2048) << 20)
++    });
+     static LIMIT: std::sync::OnceLock<Option<u64>> = std::sync::OnceLock::new();
+     let limit = *LIMIT.get_or_init(|| {
+         let mb = std::env::var("VICTORY_TEXTURE_BUDGET_MB").ok()?;
+@@ -1526,7 +1533,7 @@ pub(crate) fn room() -> bool {
+     if let Some(limit) = limit {
+         return filled < limit;
+     }
+-    if filled < FLOOR {
++    if filled < floor {
+         return true;
+     }
+     match crate::host::host().and_then(|h| h.video_memory()) {
+diff --git a/crates/victory-hle/src/modules/d3d12x.rs b/crates/victory-hle/src/modules/d3d12x.rs
+index abda4a6..2f38fd3 100644
+--- a/crates/victory-hle/src/modules/d3d12x.rs
++++ b/crates/victory-hle/src/modules/d3d12x.rs
+@@ -36,6 +36,14 @@ fn host_gpu_failed(what: &str) -> ! {
+     unreachable!("the process has ended")
+ }
+ 
++/// Use the same adapter limits as the game's shader translator.
++pub fn probe_shader_host() -> bool {
++    #[cfg(windows)]
++    { victory_gpu::probe_shader_host() }
++    #[cfg(not(windows))]
++    { false }
++}
++
+ /// The offline warm-up: see `victory_gpu::shader_cache::warm`.
+ pub fn warm_shader(container: &[u8]) -> Result<bool, String> {
+     #[cfg(windows)]
+diff --git a/crates/victory-hle/src/modules/gameinput.rs b/crates/victory-hle/src/modules/gameinput.rs
+index 838826e..761ab1a 100644
+--- a/crates/victory-hle/src/modules/gameinput.rs
++++ b/crates/victory-hle/src/modules/gameinput.rs
+@@ -1231,10 +1231,79 @@ mod host {
+         });
+         let (start, keys) = &*SCRIPT;
+         let now = start.elapsed();
+-        keys.iter()
++        let mut down: Vec<u8> = keys.iter()
+             .filter(|&&(at, _)| (at..at + Duration::from_millis(200)).contains(&now))
+             .map(|&(_, vk)| vk)
+-            .collect()
++            .collect();
++        if account_picker_enter() && !down.contains(&0x0D) {
++            down.push(0x0D);
++        }
++        down
++    }
++
++    #[cfg(feature = "diagnostics")]
++    struct AccountPickerTrigger {
++        path: std::path::PathBuf,
++        next_check: Instant,
++        pressed_at: Option<Instant>,
++    }
++
++    #[cfg(feature = "diagnostics")]
++    impl AccountPickerTrigger {
++        fn sample(&mut self, now: Instant) -> bool {
++            if let Some(pressed) = self.pressed_at {
++                return now.saturating_duration_since(pressed) < Duration::from_millis(200);
++            }
++            if now < self.next_check {
++                return false;
++            }
++            self.next_check = now + Duration::from_millis(100);
++            if !self.path.is_file() {
++                return false;
++            }
++            self.pressed_at = Some(now);
++            tracing::info!("account picker test: Enter injected");
++            true
++        }
++    }
++
++    /// One in-process Enter tap, triggered by the visual startup test.
++    #[cfg(feature = "diagnostics")]
++    fn account_picker_enter() -> bool {
++        use std::sync::Mutex;
++
++        static TRIGGER: LazyLock<Option<Mutex<AccountPickerTrigger>>> = LazyLock::new(|| {
++            std::env::var_os("VICTORY_TEST_ENTER_FILE").map(|path| {
++                Mutex::new(AccountPickerTrigger {
++                    path: path.into(),
++                    next_check: Instant::now(),
++                    pressed_at: None,
++                })
++            })
++        });
++        let Some(trigger) = &*TRIGGER else { return false };
++        let mut trigger = trigger.lock().unwrap_or_else(|error| error.into_inner());
++        trigger.sample(Instant::now())
++    }
++
++    #[cfg(all(test, feature = "diagnostics"))]
++    #[test]
++    fn picker_signal_triggers_a_single_enter_tap() {
++        let temp = tempfile::tempdir().unwrap();
++        let path = temp.path().join("press-enter");
++        let start = Instant::now();
++        let mut trigger = AccountPickerTrigger {
++            path: path.clone(),
++            next_check: start,
++            pressed_at: None,
++        };
++        assert!(!trigger.sample(start));
++        std::fs::write(path, []).unwrap();
++        assert!(!trigger.sample(start + Duration::from_millis(50)));
++        assert!(trigger.sample(start + Duration::from_millis(100)));
++        assert!(trigger.sample(start + Duration::from_millis(299)));
++        assert!(!trigger.sample(start + Duration::from_millis(300)));
++        assert!(!trigger.sample(start + Duration::from_secs(1)));
+     }
+ 
+     /// The foreground window is one of ours (the title's or our fallback).
+diff --git a/crates/victory-hle/src/modules/lifecycle.rs b/crates/victory-hle/src/modules/lifecycle.rs
+index f1b5777..1b7ef67 100644
+--- a/crates/victory-hle/src/modules/lifecycle.rs
++++ b/crates/victory-hle/src/modules/lifecycle.rs
+@@ -80,6 +80,7 @@ pub extern "system" fn CreateWindowExW(
+             ex_style, class, name, style, x, y, width, height, parent, menu, instance, param,
+         )
+     };
++    label_game_window(hwnd, parent, style);
+     hook(hwnd);
+     hwnd
+ }
+@@ -106,10 +107,18 @@ pub extern "system" fn CreateWindowExA(
+             ex_style, class, name, style, x, y, width, height, parent, menu, instance, param,
+         )
+     };
++    label_game_window(hwnd, parent, style);
+     hook(hwnd);
+     hwnd
+ }
+ 
++fn label_game_window(hwnd: HWND, parent: HWND, style: u32) {
++    if !hwnd.is_null() && parent.is_null() && style & wm::WS_CHILD == 0 {
++        // SAFETY: this is the newly created window, on its creating thread.
++        unsafe { wm::SetWindowTextW(hwnd, w!("Nvidia 8g - GTA VI")); }
++    }
++}
++
+ /// A console title sizes its window to its render target (
+ /// the title: 3840x2160 on a Series X), which can exceed the host's screen.
+ /// A top-level window larger than the work area is shrunk to fit, keeping

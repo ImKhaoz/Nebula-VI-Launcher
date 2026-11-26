@@ -1,0 +1,200 @@
+diff --git a/apps/victory/src/translate.rs b/apps/victory/src/translate.rs
+index 3881df1..4852b3c 100644
+--- a/apps/victory/src/translate.rs
++++ b/apps/victory/src/translate.rs
+@@ -320,45 +320,54 @@ pub fn warm(paths: Vec<PathBuf>, jobs: Option<usize>, pipelines: bool) -> Result
+             if !entry.file_type().is_file() || entry.metadata().map_or(0, |m| m.len()) > MAX_FILE {
+                 continue;
+             }
++            println!("warm-scan");
+             let Ok(data) = std::fs::read(entry.path()) else {
+                 continue;
+             };
+             let jobs = sources(&data);
+             let next = AtomicUsize::new(0);
++            let checked = AtomicUsize::new(0);
++            println!("warm-progress 0 {}", jobs.len());
+             std::thread::scope(|s| {
+                 for _ in 0..threads.min(jobs.len()) {
+                     s.spawn(|| {
+                         while let Some(job) = jobs.get(next.fetch_add(1, Ordering::Relaxed)) {
+-                            let Some(bytes) = job.bytes() else { continue };
+-                            let Ok(container) = Container::parse(&bytes) else { continue };
+-                            // As the title passes it: no more than the container.
+-                            let Some(total) = bytes.get(0x18..0x1c).and_then(|b| b.try_into().ok()) else { continue };
+-                            let total = u32::from_le_bytes(total) as usize;
+-                            let bytes = &bytes[..total.min(bytes.len())];
+-                            let Some(dxil) = container.part(FourCC::DXIL).map(|p| p.data) else { continue };
+-                            if !lock(&seen).insert(blake3::hash(bytes)) {
+-                                continue;
+-                            }
+-                            let Ok(programs) = native_programs(dxil) else { continue };
+-                            let stage = programs.iter().find_map(|p| match p.stage {
+-                                HwStage::Vs => Some("vertex"),
+-                                HwStage::Ps => Some("pixel"),
+-                                HwStage::Ms => Some("mesh"),
+-                                HwStage::Cs => Some("compute"),
+-                                _ => None,
+-                            });
+-                            let Some(stage) = stage else { continue };
+-                            let compute = pipelines && stage == "compute";
+-                            let (translated, pipeline) = victory_hle::modules::d3d12x::warm(stage, bytes, compute);
+-                            let count = if translated { &done } else { &refused };
+-                            let n = count.fetch_add(1, Ordering::Relaxed) + 1;
+-                            match pipeline {
+-                                Some(true) => made.fetch_add(1, Ordering::Relaxed),
+-                                Some(false) => unmade.fetch_add(1, Ordering::Relaxed),
+-                                None => 0,
+-                            };
+-                            if n.is_multiple_of(2000) {
+-                                println!("{:6.0} s  {n} shaders", started.elapsed().as_secs_f64());
++                            (|| {
++                                let Some(bytes) = job.bytes() else { return };
++                                let Ok(container) = Container::parse(&bytes) else { return };
++                                // As the title passes it: no more than the container.
++                                let Some(total) = bytes.get(0x18..0x1c).and_then(|b| b.try_into().ok()) else { return };
++                                let total = u32::from_le_bytes(total) as usize;
++                                let bytes = &bytes[..total.min(bytes.len())];
++                                let Some(dxil) = container.part(FourCC::DXIL).map(|p| p.data) else { return };
++                                if !lock(&seen).insert(blake3::hash(bytes)) {
++                                    return;
++                                }
++                                let Ok(programs) = native_programs(dxil) else { return };
++                                let stage = programs.iter().find_map(|p| match p.stage {
++                                    HwStage::Vs => Some("vertex"),
++                                    HwStage::Ps => Some("pixel"),
++                                    HwStage::Ms => Some("mesh"),
++                                    HwStage::Cs => Some("compute"),
++                                    _ => None,
++                                });
++                                let Some(stage) = stage else { return };
++                                let compute = pipelines && stage == "compute";
++                                let (translated, pipeline) = victory_hle::modules::d3d12x::warm(stage, bytes, compute);
++                                let count = if translated { &done } else { &refused };
++                                let n = count.fetch_add(1, Ordering::Relaxed) + 1;
++                                match pipeline {
++                                    Some(true) => made.fetch_add(1, Ordering::Relaxed),
++                                    Some(false) => unmade.fetch_add(1, Ordering::Relaxed),
++                                    None => 0,
++                                };
++                                if n.is_multiple_of(2000) {
++                                    println!("{:6.0} s  {n} shaders", started.elapsed().as_secs_f64());
++                                }
++                            })();
++                            let completed = checked.fetch_add(1, Ordering::Relaxed) + 1;
++                            if completed.is_multiple_of(64) || completed == jobs.len() {
++                                println!("warm-progress {completed} {}", jobs.len());
+                             }
+                         }
+                     });
+@@ -367,6 +376,7 @@ pub fn warm(paths: Vec<PathBuf>, jobs: Option<usize>, pipelines: bool) -> Result
+         }
+     }
+     victory_hle::modules::d3d12x::save_pipeline_cache();
++    println!("warm-result {}", done.load(Ordering::Relaxed));
+     println!(
+         "warm         {} translated, {} refused; {} compute pipelines, {} refused; {:.0} s",
+         done.into_inner(),
+diff --git a/crates/victory-gpu/src/capture.rs b/crates/victory-gpu/src/capture.rs
+index f05445d..5f6ae5f 100644
+--- a/crates/victory-gpu/src/capture.rs
++++ b/crates/victory-gpu/src/capture.rs
+@@ -158,7 +158,11 @@ pub(crate) fn wanted(n: u64) -> bool {
+     // run, so single frames cannot be compared between runs).
+     let first = WORLD.load(std::sync::atomic::Ordering::Relaxed);
+     let in_world = world_on() && first != u64::MAX && n > first && (n - first) % 8 < 2;
+-    folder().is_some() && (n.is_power_of_two() || listed(n) || before_world || in_world)
++    static TEST_INTERVAL: std::sync::OnceLock<Option<u64>> = std::sync::OnceLock::new();
++    let test_sample = TEST_INTERVAL.get_or_init(|| {
++        std::env::var("VICTORY_TEST_CAPTURE_INTERVAL").ok()?.parse().ok().filter(|&interval| interval >= 30)
++    }).is_some_and(|interval| n % interval == 0);
++    folder().is_some() && (n.is_power_of_two() || listed(n) || before_world || in_world || test_sample)
+ }
+ 
+ /// Saves 8-bit RGBA or BGRA rows (`pitch` bytes apart) as frame `n`.
+diff --git a/crates/victory-hle/src/modules/gameinput.rs b/crates/victory-hle/src/modules/gameinput.rs
+index 6cb89fa..c8779f9 100644
+--- a/crates/victory-hle/src/modules/gameinput.rs
++++ b/crates/victory-hle/src/modules/gameinput.rs
+@@ -1231,10 +1231,79 @@ mod host {
+         });
+         let (start, keys) = &*SCRIPT;
+         let now = start.elapsed();
+-        keys.iter()
++        let mut down: Vec<u8> = keys.iter()
+             .filter(|&&(at, _)| (at..at + Duration::from_millis(200)).contains(&now))
+             .map(|&(_, vk)| vk)
+-            .collect()
++            .collect();
++        if account_picker_enter() && !down.contains(&0x0D) {
++            down.push(0x0D);
++        }
++        down
++    }
++
++    #[cfg(feature = "diagnostics")]
++    struct AccountPickerTrigger {
++        path: std::path::PathBuf,
++        next_check: Instant,
++        pressed_at: Option<Instant>,
++    }
++
++    #[cfg(feature = "diagnostics")]
++    impl AccountPickerTrigger {
++        fn sample(&mut self, now: Instant) -> bool {
++            if let Some(pressed) = self.pressed_at {
++                return now.saturating_duration_since(pressed) < Duration::from_millis(200);
++            }
++            if now < self.next_check {
++                return false;
++            }
++            self.next_check = now + Duration::from_millis(100);
++            if !self.path.is_file() {
++                return false;
++            }
++            self.pressed_at = Some(now);
++            tracing::info!("account picker test: Enter injected");
++            true
++        }
++    }
++
++    /// One in-process Enter tap, triggered by the visual startup test.
++    #[cfg(feature = "diagnostics")]
++    fn account_picker_enter() -> bool {
++        use std::sync::Mutex;
++
++        static TRIGGER: LazyLock<Option<Mutex<AccountPickerTrigger>>> = LazyLock::new(|| {
++            std::env::var_os("VICTORY_TEST_ENTER_FILE").map(|path| {
++                Mutex::new(AccountPickerTrigger {
++                    path: path.into(),
++                    next_check: Instant::now(),
++                    pressed_at: None,
++                })
++            })
++        });
++        let Some(trigger) = &*TRIGGER else { return false };
++        let mut trigger = trigger.lock().unwrap_or_else(|error| error.into_inner());
++        trigger.sample(Instant::now())
++    }
++
++    #[cfg(all(test, feature = "diagnostics"))]
++    #[test]
++    fn picker_signal_triggers_a_single_enter_tap() {
++        let temp = tempfile::tempdir().unwrap();
++        let path = temp.path().join("press-enter");
++        let start = Instant::now();
++        let mut trigger = AccountPickerTrigger {
++            path: path.clone(),
++            next_check: start,
++            pressed_at: None,
++        };
++        assert!(!trigger.sample(start));
++        std::fs::write(path, []).unwrap();
++        assert!(!trigger.sample(start + Duration::from_millis(50)));
++        assert!(trigger.sample(start + Duration::from_millis(100)));
++        assert!(trigger.sample(start + Duration::from_millis(299)));
++        assert!(!trigger.sample(start + Duration::from_millis(300)));
++        assert!(!trigger.sample(start + Duration::from_secs(1)));
+     }
+ 
+     /// The foreground window is one of ours (the title's or our fallback).

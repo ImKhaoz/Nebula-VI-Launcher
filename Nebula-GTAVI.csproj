@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>Nebula-GTAVI-Version</AssemblyName>
+    <Product>Nebula GTA VI Edition</Product>
+    <Description>Local game launcher for the GTA VI Edition of Nebula</Description>
+    <DefineConstants>$(DefineConstants);NEBULA_GTA_ONLY</DefineConstants>
+    <ApplicationIcon>Assets\Nexus.ico</ApplicationIcon>
+    <RootNamespace>XboxEmulatorUI</RootNamespace>
+    <DefaultItemExcludes>$(DefaultItemExcludes);tools/**;release/**</DefaultItemExcludes>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4370.26" />
+    <Resource Include="Assets\Nexus.ico" />
+    <EmbeddedResource Include="tools\victory-world-nebula.patch" LogicalName="VictoryWorld.Nebula.patch" />
+    <EmbeddedResource Include="tools\victory-nvidia-nebula.patch" LogicalName="VictoryNvidia.Nebula.patch" />
+    <Content Include="Dashboard\**\*.html;Dashboard\**\*.css;Dashboard\**\*.js;Dashboard\**\*.svg;Dashboard\vendor\hls.js-LICENSE.txt"
+             CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Assets\NexusLogo.png;Assets\NexusStartup.wav;Assets\NebulaWordmark.png;Assets\NebulaHeaderLettering.png"
+             CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="licenses\VIctory-GPL-3.0.txt" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>
